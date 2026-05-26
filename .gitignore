@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+.cache/
+
+# HuggingFace
+.huggingface/
+hub/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.venv/
+
+# Project artifacts (runtime generated, not tracked)
+shared/bgm/
+shared/whisper/
+projects/*/voice.wav
+projects/*/*.wav
+projects/*/output.mp4
+projects/*/_*.mp4
+projects/*/_*.srt
+projects/*/_*.wav

@@ -1,0 +1,62 @@
+[paths]
+projects_dir = "projects"
+shared_dir = "shared"
+
+[asr]
+engine = "py"
+model = "tiny"
+language = "en"
+device = "cpu"
+compute_type = "int8"
+exe_path = "shared/whisper/whisper-faster.exe"
+exe_model_dir = "shared/whisper/_models"
+
+[tts]
+voice = "zh-CN-YunjianNeural"
+volume = "+0%"
+max_rate_boost = 40
+
+[mix]
+voice_gain = 1.4
+ambient_gain = 0.15
+bgm_gain = 0.15
+bgm_path = "shared/bgm/default.mp3"
+
+[subtitle_original]
+font = "Arial"
+size = 14
+primary = "&HFFFFFF"
+outline_color = "&H000000"
+outline = 1
+shadow = 0
+margin_v = 20
+alignment = 8
+
+[subtitle_narration]
+font = "Microsoft YaHei"
+size = 26
+primary = "&H00FFFF"
+outline_color = "&H000000"
+outline = 2
+shadow = 1
+margin_v = 40
+alignment = 2
+bold = 1
+
+# Cross-platform font fallback (used on Linux where Windows fonts are missing)
+[fonts]
+# Windows defaults (overridden above); Linux fallbacks set in code
+linux_subtitle_original = "DejaVu Sans"
+linux_subtitle_narration = "Noto Sans CJK SC Regular"
+
+[llm]
+model = "claude-opus-4-7"
+api_key_env = "ANTHROPIC_API_KEY"
+default_style = "B站电影解说，先抑后扬，三段式：背景→亮点→收尾"
+default_length = 800
+n_segments = 3
+
+[encode]
+crf = 18
+codec_v = "libx264"
+codec_a = "aac"
