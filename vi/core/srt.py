@@ -79,3 +79,51 @@ def write_srt(path: str | Path, entries: list[tuple[int, int, str]]) -> None:
         out.append(text)
         out.append("")
     Path(path).write_text("\n".join(out), encoding="utf-8")
+
+
+_TS_RE = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
+
+
+def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:
+    """LLMs sometimes write `01:00:01` when they mean `00:01:01` (carry into hour
+    instead of minute). Detect that by checking if the value exceeds the video
+    duration, and swap h/m when it does."""
+    total = (h * 3600 + m * 60 + s) * 1000 + ms
+    if total <= max_ms or h == 0:
+        return total
+    swapped = (m * 3600 + h * 60 + s) * 1000 + ms
+    if swapped <= max_ms:
+        return swapped
+    return total
+
+
+def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
+    """Reformat LLM-generated SRT, fixing common timestamp bugs.
+
+    - Re-parses each block's two timestamps and writes them back via ms_to_ts
+      so the format is canonical (`HH:MM:SS,mmm`).
+    - Detects the "hour carry" bug where `00:01:XX` is written as `01:00:XX`
+      and rewrites by swapping h/m when the original value would exceed
+      max_duration_ms.
+    """
+    blocks = re.split(r"\n\s*\n", text.strip())
+    fixed_blocks: list[str] = []
+    # Allow ~10s slop so a final block that brushes against the duration still passes.
+    cap = max_duration_ms + 10_000
+    for block in blocks:
+        lines = [l.rstrip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 2:
+            continue
+        m = re.match(
+            r"\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*",
+            lines[1],
+        )
+        if not m:
+            fixed_blocks.append("\n".join(lines))
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+        start_ms = _fix_carry_bug(h1, m1, s1, ms1, cap)
+        end_ms = _fix_carry_bug(h2, m2, s2, ms2, cap)
+        lines[1] = f"{ms_to_ts(start_ms)} --> {ms_to_ts(end_ms)}"
+        fixed_blocks.append("\n".join(lines))
+    return "\n\n".join(fixed_blocks) + "\n"

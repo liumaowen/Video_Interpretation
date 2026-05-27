@@ -1,32 +1,85 @@
-"""faster-whisper Python ASR. Produces word-level grouped SRT."""
+"""faster-whisper Python ASR. Produces sentence-aware SRT with better grouping."""
 from pathlib import Path
 
 from .srt import ms_to_ts
 
+MAX_WORDS = 13
+MAX_CHARS = 60
+MAX_GAP_S = 1.2
+MIN_DURATION_MS = 800
+END_PUNCT = (".", "!", "?")
+SOFT_PUNCT = (",", ";", ":")
 
-def group_words(words, max_words=8, max_gap_s=0.8, max_chars=42):
-    lines = []
-    buf = []
+
+def group_words(words):
+    """Sentence-aware grouping: split on sentence boundaries first,
+    then split long sentences at commas/gaps, finally merge short tails."""
+    # Step 1: split into sentences at end punctuation
+    sentences = []
+    cur = []
     for w in words:
-        if not buf:
-            buf.append(w)
+        cur.append(w)
+        if w.word.rstrip().endswith(END_PUNCT):
+            sentences.append(cur)
+            cur = []
+    if cur:
+        sentences.append(cur)
+
+    # Step 2: split long sentences at soft punctuation / long gaps
+    lines = []
+    for sent in sentences:
+        text = "".join(w.word for w in sent).strip()
+        if len(sent) <= MAX_WORDS and len(text) <= MAX_CHARS:
+            lines.append(sent)
             continue
-        gap = w.start - buf[-1].end
-        cur_text = "".join(x.word for x in buf)
-        too_long = (
-            len(buf) >= max_words
-            or len(cur_text) + len(w.word) > max_chars
-            or gap > max_gap_s
-            or buf[-1].word.rstrip().endswith((".", "!", "?"))
-        )
-        if too_long:
-            lines.append(buf)
-            buf = [w]
-        else:
+
+        # Find split points at soft punctuation or long gaps
+        split_indices = set()
+        for i, w in enumerate(sent[:-1]):
+            if w.word.rstrip().endswith(SOFT_PUNCT):
+                split_indices.add(i)
+            gap = sent[i + 1].start - w.end
+            if gap > MAX_GAP_S:
+                split_indices.add(i)
+
+        if not split_indices:
+            # No natural breaks — split evenly
+            mid = len(sent) // 2
+            split_indices = {mid} if mid > 0 else set()
+
+        # Build sub-groups from split points
+        buf = []
+        for i, w in enumerate(sent):
             buf.append(w)
-    if buf:
-        lines.append(buf)
-    return lines
+            buf_text = "".join(x.word for x in buf).strip()
+            if i in split_indices and (
+                len(buf) >= 3 and (len(buf) >= MAX_WORDS or len(buf_text) >= MAX_CHARS)
+            ):
+                lines.append(buf)
+                buf = []
+        if buf:
+            # Merge short tail into previous line if possible
+            if lines and len(buf) <= 2:
+                lines[-1].extend(buf)
+            else:
+                lines.append(buf)
+
+    # Step 3: merge lines shorter than MIN_DURATION_MS with next line
+    merged = []
+    for grp in lines:
+        if not grp:
+            continue
+        duration_ms = (grp[-1].end - grp[0].start) * 1000
+        if (
+            merged
+            and duration_ms < MIN_DURATION_MS
+            and not grp[-1].word.rstrip().endswith(END_PUNCT)
+        ):
+            merged[-1].extend(grp)
+        else:
+            merged.append(grp)
+
+    return merged
 
 
 def transcribe(
@@ -45,7 +98,8 @@ def transcribe(
         str(video_path),
         language=language,
         word_timestamps=True,
-        vad_filter=False,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=500),
     )
     print(f"Detected language: {info.language} (prob {info.language_probability:.2f})")
 

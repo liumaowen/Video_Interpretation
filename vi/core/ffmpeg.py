@@ -22,7 +22,6 @@ def _resolve_font(font_name: str, cfg: dict) -> str:
 
 def _style(cfg: dict, font_cfg: dict | None = None) -> str:
     effective_font = _resolve_font(cfg["font"], font_cfg or cfg)
-    # ASS-style key=value joined with commas
     parts = [
         f"FontName={effective_font}",
         f"FontSize={cfg['size']}",
@@ -33,6 +32,10 @@ def _style(cfg: dict, font_cfg: dict | None = None) -> str:
         f"MarginV={cfg['margin_v']}",
         f"Alignment={cfg['alignment']}",
     ]
+    if cfg.get("margin_l") is not None:
+        parts.append(f"MarginL={cfg['margin_l']}")
+    if cfg.get("margin_r") is not None:
+        parts.append(f"MarginR={cfg['margin_r']}")
     if cfg.get("bold"):
         parts.append(f"Bold={cfg['bold']}")
     return ",".join(parts)

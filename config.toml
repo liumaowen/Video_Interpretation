@@ -29,8 +29,10 @@ primary = "&HFFFFFF"
 outline_color = "&H000000"
 outline = 1
 shadow = 0
-margin_v = 20
+margin_v = 60
 alignment = 8
+margin_l = 0
+margin_r = 0
 
 [subtitle_narration]
 font = "Microsoft YaHei"
@@ -50,8 +52,12 @@ linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [llm]
-model = "claude-opus-4-7"
-api_key_env = "ANTHROPIC_API_KEY"
+provider = "openai_compatible"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+model = "glm-4.7-flash"
+api_key = "32aa027e59da4bcbb714267da64fcc11.R5CtNB7Kk4z9GNvK"
+api_key_env = "ZHIPU_API_KEY"
+vision_model = "glm-4.6v-flash"
 default_style = "B站电影解说，先抑后扬，三段式：背景→亮点→收尾"
 default_length = 800
 n_segments = 3

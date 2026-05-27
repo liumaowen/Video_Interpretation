@@ -1,0 +1,10 @@
+[project]
+name = "The Dog Stars Official Trailer"
+title = "The Dog Stars Official Trailer"
+created = "2026-05-27"
+
+[source]
+video = "source.mp4"
+
+[output]
+filename = "output.mp4"

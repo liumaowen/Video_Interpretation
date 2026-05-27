@@ -31,3 +31,4 @@ projects/*/output.mp4
 projects/*/_*.mp4
 projects/*/_*.srt
 projects/*/_*.wav
+projects/*/_tts_tmp
