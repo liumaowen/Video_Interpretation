@@ -66,10 +66,11 @@ def _split_long_segment(
 def _entries_from_result(res: list[dict]) -> list[tuple[int, int, str]]:
     """Normalize FunASR result into [(start_ms, end_ms, text), ...].
 
-    Handles three possible shapes:
-    1. Each item has `sentence_info`: [{text, start, end}, ...]   (preferred)
-    2. Each item has a `timestamp` field [[s_ms, e_ms], ...] for the whole text
-    3. Item has only `text` — falls back to a single span if no timestamps
+    FunASR's output shape varies with version and config. We handle:
+    1. Item has `sentence_info`: [{text, start, end}, ...]   (preferred, merge_vad=True)
+    2. Item has top-level `start`/`end` + `text`             (merge_vad=False, per-chunk)
+    3. Item has `timestamp` [[s_ms, e_ms], ...] + `text`     (span-level)
+    4. Multiple items, each one VAD chunk
     """
     entries: list[tuple[int, int, str]] = []
     for item in res:
@@ -91,7 +92,18 @@ def _entries_from_result(res: list[dict]) -> list[tuple[int, int, str]]:
         if not text:
             continue
 
-        # Case 2: span-level timestamp
+        # Case 2: per-item start/end (FunASR returns one item per VAD chunk)
+        if "start" in item and "end" in item:
+            try:
+                start = int(item["start"])
+                end = int(item["end"])
+            except (TypeError, ValueError):
+                start = end = 0
+            if end > start:
+                entries.extend(_split_long_segment(text, start, end))
+                continue
+
+        # Case 3: span-level timestamp
         ts = item.get("timestamp")
         if ts and isinstance(ts, list) and ts:
             try:
@@ -103,7 +115,7 @@ def _entries_from_result(res: list[dict]) -> list[tuple[int, int, str]]:
                 entries.extend(_split_long_segment(text, start, end))
                 continue
 
-        # Case 3: no timestamps — skip silently (VAD should always provide them)
+        # Case 4: no timestamps — skip silently (VAD should always provide them)
 
     return entries
 
@@ -167,15 +179,21 @@ def transcribe(
         language=lang,
         use_itn=True,
         batch_size_s=60,
-        merge_vad=False,
+        merge_vad=True,
+        merge_length_s=15,
     )
+
+    # Surface the raw shape so users can report it if parsing still misses.
+    if res:
+        keys = sorted(set(k for item in res if isinstance(item, dict) for k in item.keys()))
+        print(f"FunASR returned {len(res)} item(s); keys per item: {keys}")
 
     entries = _entries_from_result(res)
     if not entries:
+        print("DEBUG raw res:", res)
         raise SystemExit(
             f"FunASR produced no usable segments for {video_path.name}. "
-            "Verify the source contains audible speech, and make sure "
-            "punc_model is empty (ct-punc strips VAD timestamps)."
+            "The raw result shape is printed above — please report it."
         )
 
     write_srt(out_srt, entries)
