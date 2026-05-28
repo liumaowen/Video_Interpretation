@@ -35,8 +35,11 @@ def run(args: argparse.Namespace) -> int:
             subtitle_path=subtitle,
             out_path=out,
             n_segments=config.get(cfg, "llm.n_segments", 3),
-            model=config.get(cfg, "llm.model", "claude-opus-4-7"),
-            api_key_env=config.get(cfg, "llm.api_key_env", "ANTHROPIC_API_KEY"),
+            model=config.get(cfg, "llm.model", "qwen2.5:7b"),
+            api_key=config.get(cfg, "llm.api_key", ""),
+            api_key_env=config.get(cfg, "llm.api_key_env", "OPENAI_API_KEY"),
+            provider=config.get(cfg, "llm.provider", "openai_compatible"),
+            base_url=config.get(cfg, "llm.base_url", ""),
         )
         return 0
 
