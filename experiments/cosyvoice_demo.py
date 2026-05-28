@@ -103,6 +103,42 @@ def _load_cosyvoice_class(use_v2: bool):
     return CosyVoice2 if use_v2 else CosyVoice
 
 
+def _patch_torchaudio_io():
+    """torchaudio 2.10+ hard-routes all I/O through torchcodec, which needs FFmpeg
+    shared libs at very specific versions (libavutil.so.57–60). Most envs don't
+    have a matching ffmpeg, so we replace CosyVoice's load_wav with a soundfile-
+    based implementation that bypasses the whole torchcodec stack.
+    """
+    import soundfile as sf
+    import torch
+    from cosyvoice.utils import file_utils
+
+    def load_wav(wav, target_sr):
+        speech_np, sr = sf.read(str(wav), dtype="float32", always_2d=True)
+        # soundfile gives (n_samples, channels); transpose → (channels, n_samples)
+        speech = torch.from_numpy(speech_np.T).mean(dim=0, keepdim=True)
+        if sr != target_sr:
+            assert sr > target_sr, f"wav sample rate {sr} < target {target_sr}"
+            import torchaudio
+            speech = torchaudio.transforms.Resample(orig_freq=sr, new_freq=target_sr)(speech)
+        return speech
+
+    file_utils.load_wav = load_wav
+
+
+def _save_wav(path: Path, audio_tensor, sample_rate: int) -> None:
+    """Save (channels, samples) tensor → WAV via soundfile (bypasses torchcodec)."""
+    import soundfile as sf
+    a = audio_tensor.detach().cpu()
+    if a.ndim == 2 and a.shape[0] == 1:
+        np_audio = a.squeeze(0).numpy()
+    elif a.ndim == 2:
+        np_audio = a.T.numpy()  # (samples, channels)
+    else:
+        np_audio = a.numpy()
+    sf.write(str(path), np_audio, sample_rate)
+
+
 def synth_cosyvoice(
     text: str,
     model_dir: Path,
@@ -115,8 +151,8 @@ def synth_cosyvoice(
     model_id: str = "iic/CosyVoice2-0.5B",
 ) -> None:
     Klass = _load_cosyvoice_class(use_v2)
+    _patch_torchaudio_io()
     import torch
-    import torchaudio
 
     download_cosyvoice_model(model_id, model_dir)
 
@@ -152,7 +188,7 @@ def synth_cosyvoice(
     if not chunks:
         raise SystemExit("CosyVoice returned no audio chunks.")
     audio = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
-    torchaudio.save(str(out_path), audio, model.sample_rate)
+    _save_wav(out_path, audio, model.sample_rate)
 
 
 async def synth_edge_tts(text: str, voice: str, out_path: Path) -> None:
@@ -179,10 +215,9 @@ def report(label: str, path: Path) -> None:
         return
     size_kb = path.stat().st_size / 1024
     try:
-        import torchaudio
-        info = torchaudio.info(str(path))
-        dur = info.num_frames / info.sample_rate
-        print(f"  {label:24}  {dur:5.1f}s  {size_kb:6.0f} KB  {info.sample_rate} Hz  → {path}")
+        import soundfile as sf
+        info = sf.info(str(path))
+        print(f"  {label:24}  {info.duration:5.1f}s  {size_kb:6.0f} KB  {info.samplerate} Hz  → {path}")
     except Exception:
         print(f"  {label:24}  {size_kb:6.0f} KB  → {path}")
 
