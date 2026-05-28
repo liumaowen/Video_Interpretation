@@ -37,6 +37,12 @@ def run(args: argparse.Namespace) -> int:
             print(f"Skipping {step}")
             continue
 
+        # refine needs source.json (only produced by --engine exe). Skip
+        # cleanly for py/funasr engines so the pipeline doesn't abort.
+        if step == "refine" and not (pdir / "source.json").exists():
+            print("Skipping refine (no source.json — engine doesn't need it)")
+            continue
+
         if step == "tts" and not (pdir / "narration_aligned.txt").exists():
             print(f"\nStopping: {pdir}/narration_aligned.txt missing.")
             print(f"Write it manually or run: python main.py llm-narrate {args.name} --align")

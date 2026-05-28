@@ -10,6 +10,10 @@ device = "cpu"
 compute_type = "int8"
 exe_path = "shared/whisper/whisper-faster.exe"
 exe_model_dir = "shared/whisper/_models"
+# FunASR / SenseVoice engine (used when engine = "funasr")
+funasr_model = "iic/SenseVoiceSmall"
+funasr_vad_model = "fsmn-vad"
+funasr_punc_model = "ct-punc"
 
 [tts]
 voice = "zh-CN-YunjianNeural"
@@ -53,11 +57,11 @@ linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [llm]
 provider = "openai_compatible"
-base_url = "https://open.bigmodel.cn/api/paas/v4"
-model = "glm-4.7-flash"
-api_key = "32aa027e59da4bcbb714267da64fcc11.R5CtNB7Kk4z9GNvK"
-api_key_env = "ZHIPU_API_KEY"
-vision_model = "glm-4.6v-flash"
+base_url = "https://api-inference.modelscope.cn/v1"
+model = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+api_key = "ms-ae67f1cb-c607-4c07-9f5d-3dfdaf6f07a1"
+api_key_env = "MODELSCOPE_API_KEY"
+vision_model = "Qwen/Qwen3-VL-235B-A22B-Instruct"
 default_style = "B站电影解说，先抑后扬，三段式：背景→亮点→收尾"
 default_length = 800
 n_segments = 3

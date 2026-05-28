@@ -99,10 +99,18 @@ python main.py ls [-l]
 ### transcribe — 识别英文字幕
 
 ```bash
-python main.py transcribe [name] [--engine py|exe] [--model tiny|base|small|...] [-f]
+python main.py transcribe [name] [--engine py|exe|funasr] [--model M] [-f]
 ```
 
-`--engine py` 用 faster-whisper 库（默认）；`--engine exe` 用 whisper-faster.exe（速度更快，但只在 Windows shared/whisper/ 下可用）。
+引擎对比：
+
+| 引擎 | 模型来源 | 优势 | 适用 |
+|---|---|---|---|
+| `py`（默认） | faster-whisper（HuggingFace） | 装好就能跑，CPU 友好 | 本地默认 |
+| `exe` | whisper-faster.exe | 速度最快 | 仅 Windows，需自备 exe |
+| `funasr` | ModelScope（SenseVoice + FSMN-VAD + ct-punc） | 多语言、自带 VAD/标点；产出无需 refine | ModelScope Notebook / 有 GPU 环境 |
+
+`--model` 对应模型 id：whisper 引擎用 `tiny`/`base`/`small`/`medium`/`large-v3`；funasr 用 ModelScope id（默认 `iic/SenseVoiceSmall`）。
 
 ### refine — 重新切分字幕
 
@@ -110,7 +118,7 @@ python main.py transcribe [name] [--engine py|exe] [--model tiny|base|small|...]
 python main.py refine [name] [-f]
 ```
 
-从 `source.json` 用更精细的算法重新切分 subtitle.srt，避免一行字幕过长。
+从 `source.json` 用更精细的算法重新切分 subtitle.srt，避免一行字幕过长。仅 `--engine exe` 会产 `source.json`；其他引擎已经在 transcribe 阶段直接产合理粒度的 SRT，refine 会被 `all` 流程自动跳过。
 
 ### llm-narrate — LLM 生成解说稿
 
@@ -192,6 +200,14 @@ python main.py clean [name] [--all] [--dry-run]
 放在仓库根目录。涵盖 ASR/TTS/混音/字幕样式/编码等所有默认值。常用字段：
 
 ```toml
+[asr]
+engine = "py"                    # py / exe / funasr
+model = "tiny"                   # whisper 引擎用 tiny/base/small/.../large-v3
+device = "cpu"                   # 有 GPU 改 "cuda:0"
+funasr_model = "iic/SenseVoiceSmall"  # engine="funasr" 时使用，ModelScope id
+funasr_vad_model = "fsmn-vad"
+funasr_punc_model = "ct-punc"
+
 [tts]
 voice = "zh-CN-YunjianNeural"   # 试 zh-CN-XiaoxiaoNeural（女声）/ zh-CN-YunyangNeural 等
 volume = "+0%"
@@ -216,11 +232,11 @@ linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [llm]
 provider = "openai_compatible"   # 或 "anthropic"
-base_url = "https://open.bigmodel.cn/api/paas/v4"   # 智谱开放平台
-model = "glm-4.7-flash"
+base_url = "https://api-inference.modelscope.cn/v1"   # ModelScope 推理 API
+model = "Qwen/Qwen3-235B-A22B-Instruct-2507"
 api_key = ""                     # 直填（不推荐进 git）；或留空走 api_key_env
-api_key_env = "ZHIPU_API_KEY"    # provider=anthropic 时改 "ANTHROPIC_API_KEY"
-vision_model = "glm-4.6v-flash"  # --vision 时使用
+api_key_env = "MODELSCOPE_API_KEY"   # provider=anthropic 时改 "ANTHROPIC_API_KEY"
+vision_model = "Qwen/Qwen3-VL-235B-A22B-Instruct"  # --vision 时使用
 default_style = "B站电影解说，先抑后扬，三段式：背景→亮点→收尾"
 default_length = 800
 n_segments = 3                   # --align 时切几个时间块

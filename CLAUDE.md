@@ -22,8 +22,8 @@ python main.py ls [-l]
 python main.py all <name>
 
 # 各个步骤（完整流程：transcribe → refine → tts → build）
-python main.py transcribe [name]   # ASR：通过 faster-whisper 识别英文字幕
-python main.py refine [name]       # 重新切分 SRT，避免一行过长
+python main.py transcribe [name]   # ASR：默认 faster-whisper；可选 --engine funasr 走 SenseVoice + FSMN-VAD
+python main.py refine [name]       # 重新切分 SRT（仅 --engine exe 需要；其他引擎已直出合理粒度，all 会自动跳过）
 python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 GLM；支持 --srt 一步式、--vision 视觉理解）
 python main.py align [name]        # 为解说稿标注时间轴
 python main.py tts [name]          # 通过 edge-tts 合成配音
@@ -59,6 +59,7 @@ vi/
 └── core/               # 算法实现
     ├── whisper_py.py   # faster-whisper Python 引擎
     ├── whisper_exe.py  # whisper-faster.exe 引擎
+    ├── asr_funasr.py   # FunASR / SenseVoice 引擎（ModelScope，直出带 VAD/标点的 SRT）
     ├── refine.py       # SRT 精炼算法
     ├── tts_engine.py   # edge-tts 封装，支持自动加速
     ├── ffmpeg.py       # ffmpeg 字幕烧录 + moviepy 混音
@@ -85,7 +86,8 @@ vi/
 3. 算法逻辑放 `vi/core/`，命令文件只做参数解析 + 调用核心模块
 
 ## 依赖
-- `faster-whisper` — ASR 转录
+- `faster-whisper` — ASR 转录（默认 py 引擎）
+- `funasr` + `modelscope` — SenseVoice / FSMN-VAD / ct-punc 流水线（`--engine funasr`）
 - `edge-tts` — 文本转语音（Microsoft Edge 在线 TTS）
 - `moviepy` — 音频混合
 - `anthropic` — Claude API（provider=anthropic 时使用）
@@ -125,6 +127,6 @@ python setup_modelscope.py
 ### 注意事项
 
 - **字体**：Windows 默认字体（Arial、Microsoft YaHei）在 Linux 上不存在，代码会自动 fallback 到 DejaVu Sans / Noto Sans CJK SC
-- **ASR 速度**：CPU 环境跑 `tiny` 模型处理 2 分钟预告片约 1-5 分钟；GPU 环境快 5-10 倍
-- **网络**：edge-tts 和 Anthropic API 需要外网，ModelScope 默认支持
+- **ASR 选型**：CPU 上跑 whisper `tiny` 处理 2 分钟预告片约 1-5 分钟；切换 `--engine funasr` 用 SenseVoiceSmall 在 ModelScope Notebook 的 GPU 上更快，且自带 VAD/标点不再需要 refine。配置示例：`[asr] engine = "funasr"`、`device = "cuda:0"`
+- **网络**：edge-tts 和 Anthropic / 智谱 API 需要外网，ModelScope 默认支持
 - **上传素材**：通过 Notebook 界面上传预告片视频到 `projects/<name>/` 目录
