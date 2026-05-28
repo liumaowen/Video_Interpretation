@@ -10,7 +10,9 @@ First run downloads iic/CosyVoice2-0.5B (~2GB) to .cache/models/CosyVoice2-0.5B/
 
 Setup (one-time):
     pip install modelscope torch torchaudio hyperpyyaml onnxruntime soundfile
-    git clone https://github.com/FunAudioLLM/CosyVoice.git third_party/CosyVoice
+    git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git third_party/CosyVoice
+    # If you already cloned without --recursive:
+    #   cd third_party/CosyVoice && git submodule update --init --recursive
     pip install -r third_party/CosyVoice/requirements.txt
 """
 import argparse
@@ -32,13 +34,32 @@ DEFAULT_TEXT = (
 )
 
 
-def setup_cosyvoice_path():
-    """Add a local CosyVoice clone to sys.path if present."""
+def setup_cosyvoice_path() -> Path | None:
+    """Add the local CosyVoice clone *and* its Matcha-TTS submodule to sys.path.
+
+    CosyVoice imports `matcha.*` directly from its bundled submodule at
+    `third_party/Matcha-TTS`, so both paths must be importable.
+    """
+    cv_root = None
     for candidate in (REPO_ROOT / "third_party" / "CosyVoice", REPO_ROOT / "CosyVoice"):
-        if candidate.exists() and str(candidate) not in sys.path:
-            sys.path.insert(0, str(candidate))
-            return candidate
-    return None
+        if candidate.exists():
+            cv_root = candidate
+            break
+    if cv_root is None:
+        return None
+
+    matcha_dir = cv_root / "third_party" / "Matcha-TTS"
+    if not matcha_dir.exists() or not (matcha_dir / "matcha").exists():
+        raise SystemExit(
+            f"Matcha-TTS submodule missing at {matcha_dir}.\n"
+            f"Fix:\n"
+            f"  cd {cv_root.relative_to(REPO_ROOT)} && git submodule update --init --recursive"
+        )
+
+    for p in (cv_root, matcha_dir):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    return cv_root
 
 
 def load_text_from_project(name: str, n_segments: int = 5) -> str:
