@@ -76,7 +76,14 @@ def load_text_from_project(name: str, n_segments: int = 5) -> str:
         lines = [l for l in block.splitlines() if l.strip()]
         if len(lines) < 3:
             continue
-        texts.append(" ".join(lines[2:]))
+        seg = " ".join(lines[2:]).strip()
+        # Ensure each segment ends with a sentence-final punctuation so the TTS
+        # engine sees clear breath/intonation breaks. Without this, segments
+        # concatenate into a single run-on string that TTS reads as one breath
+        # group → unintelligible.
+        if seg and seg[-1] not in "。！？.!?":
+            seg += "。"
+        texts.append(seg)
     return "".join(texts)
 
 
