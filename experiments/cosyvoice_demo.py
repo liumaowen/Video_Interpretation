@@ -172,6 +172,18 @@ def synth_cosyvoice(
     print(f"Loading {Klass.__name__} from {model_dir.name} (cold start ~30s)…")
     model = Klass(str(model_dir), load_jit=False, load_trt=False, fp16=False)
 
+    # CosyVoice 2 ships BF16 weights but on CPU the forward pass keeps inputs as
+    # Float32 (CUDA autocast is disabled). Linear layers then choke on
+    # `mat1(Float32) @ mat2(BFloat16)`. Force all PyTorch sub-modules to FP32 —
+    # ~2x memory but the only reliable CPU path.
+    inner = getattr(model, "model", None)
+    if inner is not None:
+        print("Casting llm/flow/hift sub-modules to FP32 for CPU inference…")
+        for attr in ("llm", "flow", "hift"):
+            sub = getattr(inner, attr, None)
+            if sub is not None and hasattr(sub, "float"):
+                sub.float()
+
     if sft_voice:
         available = list(model.list_available_spks()) if hasattr(model, "list_available_spks") else []
         if not available:
