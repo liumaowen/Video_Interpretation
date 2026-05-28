@@ -1,9 +1,14 @@
-"""FunASR ASR engine (SenseVoiceSmall + FSMN-VAD + CT-Transformer-punc).
+"""FunASR ASR engine (SenseVoiceSmall + FSMN-VAD).
 
 Pipeline:
 - FSMN-VAD splits the audio into speech chunks
 - SenseVoiceSmall transcribes each chunk (multilingual: en/zh/yue/ja/ko)
-- CT-Transformer-punc adds punctuation if SenseVoice's built-in ITN isn't enough
+- SenseVoice's built-in ITN (`use_itn=True`) adds punctuation
+
+ct-punc is intentionally NOT used by default: when chained after SenseVoice it
+merges all VAD chunks into a single text and drops per-chunk timestamps, which
+leaves us nothing to build an SRT from. SenseVoice's built-in punctuation is
+sufficient for our purposes.
 
 Output is a sentence-level SRT, so the `refine` step is unnecessary when this
 engine is used.
@@ -17,13 +22,15 @@ from pathlib import Path
 from .srt import write_srt
 
 
-_TAG_RE = re.compile(r"<\|[^|]*\|>")
+# Tolerate whitespace inside tags (ct-punc tokenizes "<|en|>" as "< | en | >").
+_TAG_RE = re.compile(r"<\s*\|[^|<>]*\|\s*>")
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?。！？])\s+")
 
 
 def _strip_tags(text: str) -> str:
     """Drop SenseVoice rich tokens like <|en|><|HAPPY|><|Speech|><|withitn|>."""
-    return _TAG_RE.sub("", text).strip()
+    cleaned = _TAG_RE.sub(" ", text)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _split_long_segment(
@@ -109,12 +116,14 @@ def transcribe(
     device: str = "cpu",
     compute_type: str = "fp32",  # accepted for signature parity; unused
     vad_model: str = "fsmn-vad",
-    punc_model: str = "ct-punc",
+    punc_model: str = "",
 ) -> int:
     """Transcribe *video_path* into a sentence-level SRT at *out_srt*.
 
     *language* accepts SenseVoice codes: "auto" / "en" / "zh" / "yue" / "ja" / "ko".
     *model_size* can be a ModelScope id (e.g. "iic/SenseVoiceSmall") or alias.
+    *punc_model* is OFF by default — passing "ct-punc" here causes FunASR to
+    merge VAD chunks and drop their timestamps, which breaks SRT generation.
     """
     try:
         from funasr import AutoModel
@@ -135,16 +144,21 @@ def transcribe(
     # SenseVoice expects "zn" for Chinese (not "zh"); normalize common synonyms.
     lang = {"zh": "zn", "cn": "zn"}.get(language, language)
 
-    print(f"Loading FunASR pipeline: {model_id} + {vad_model} + {punc_model} (device={device})")
-    model = AutoModel(
+    pipeline_desc = f"{model_id} + {vad_model}"
+    auto_kwargs = dict(
         model=model_id,
         trust_remote_code=True,
         vad_model=vad_model,
         vad_kwargs={"max_single_segment_time": 30000},
-        punc_model=punc_model,
         device=device,
         disable_update=True,
     )
+    if punc_model and punc_model.lower() != "none":
+        auto_kwargs["punc_model"] = punc_model
+        pipeline_desc += f" + {punc_model}"
+
+    print(f"Loading FunASR pipeline: {pipeline_desc} (device={device})")
+    model = AutoModel(**auto_kwargs)
 
     print(f"Transcribing {video_path.name}...")
     res = model.generate(
@@ -155,12 +169,13 @@ def transcribe(
         batch_size_s=60,
         merge_vad=False,
     )
-    print("DEBUG raw res:", res)
+
     entries = _entries_from_result(res)
     if not entries:
         raise SystemExit(
             f"FunASR produced no usable segments for {video_path.name}. "
-            "Verify the source contains audible speech."
+            "Verify the source contains audible speech, and make sure "
+            "punc_model is empty (ct-punc strips VAD timestamps)."
         )
 
     write_srt(out_srt, entries)

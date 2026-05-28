@@ -13,7 +13,7 @@ exe_model_dir = "shared/whisper/_models"
 # FunASR / SenseVoice engine (used when engine = "funasr")
 funasr_model = "iic/SenseVoiceSmall"
 funasr_vad_model = "fsmn-vad"
-funasr_punc_model = "ct-punc"
+funasr_punc_model = ""  # Leave empty: SenseVoice's use_itn=True already adds punctuation, and chaining ct-punc drops VAD timestamps (no SRT possible).
 
 [tts]
 voice = "zh-CN-YunjianNeural"

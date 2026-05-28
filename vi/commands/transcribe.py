@@ -55,7 +55,7 @@ def run(args: argparse.Namespace) -> int:
             language=language,
             device=config.get(cfg, "asr.device", "cpu"),
             vad_model=config.get(cfg, "asr.funasr_vad_model", "fsmn-vad"),
-            punc_model=config.get(cfg, "asr.funasr_punc_model", "ct-punc"),
+            punc_model=config.get(cfg, "asr.funasr_punc_model", ""),
         )
     else:
         from ..core.whisper_exe import transcribe
