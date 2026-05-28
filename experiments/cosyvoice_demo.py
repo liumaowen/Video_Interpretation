@@ -104,26 +104,39 @@ def _load_cosyvoice_class(use_v2: bool):
 
 
 def _patch_torchaudio_io():
-    """torchaudio 2.10+ hard-routes all I/O through torchcodec, which needs FFmpeg
-    shared libs at very specific versions (libavutil.so.57–60). Most envs don't
-    have a matching ffmpeg, so we replace CosyVoice's load_wav with a soundfile-
-    based implementation that bypasses the whole torchcodec stack.
+    """torchaudio 2.10+ hard-routes torchaudio.load through torchcodec, which
+    needs FFmpeg shared libs (libavutil.so.57–60) that rarely match the system
+    install. We replace torchaudio.load / torchaudio.save module-globally with
+    soundfile-based implementations. Any caller that does
+        `import torchaudio; torchaudio.load(...)`
+    picks up the patched version because the lookup happens at call time.
+    (Callers that did `from torchaudio import load` before the patch would
+    keep the old reference — but CosyVoice's file_utils.py uses the module
+    attribute form, so we're covered.)
     """
+    import torchaudio
     import soundfile as sf
     import torch
-    from cosyvoice.utils import file_utils
 
-    def load_wav(wav, target_sr):
-        speech_np, sr = sf.read(str(wav), dtype="float32", always_2d=True)
-        # soundfile gives (n_samples, channels); transpose → (channels, n_samples)
-        speech = torch.from_numpy(speech_np.T).mean(dim=0, keepdim=True)
-        if sr != target_sr:
-            assert sr > target_sr, f"wav sample rate {sr} < target {target_sr}"
-            import torchaudio
-            speech = torchaudio.transforms.Resample(orig_freq=sr, new_freq=target_sr)(speech)
-        return speech
+    def patched_load(filepath, **kwargs):
+        # Ignore kwargs like backend=, normalize=, frame_offset=, num_frames= —
+        # soundfile.read always behaves the same way and these defaults match
+        # what CosyVoice / FunASR expect.
+        speech_np, sr = sf.read(str(filepath), dtype="float32", always_2d=True)
+        # sf.read with always_2d gives (n_samples, channels);
+        # torchaudio.load returns (channels, n_samples)
+        return torch.from_numpy(speech_np.T), sr
 
-    file_utils.load_wav = load_wav
+    def patched_save(filepath, src, sample_rate, **kwargs):
+        a = src.detach().cpu()
+        if a.ndim == 2:
+            np_audio = a.squeeze(0).numpy() if a.shape[0] == 1 else a.T.numpy()
+        else:
+            np_audio = a.numpy()
+        sf.write(str(filepath), np_audio, sample_rate)
+
+    torchaudio.load = patched_load
+    torchaudio.save = patched_save
 
 
 def _save_wav(path: Path, audio_tensor, sample_rate: int) -> None:
