@@ -84,6 +84,37 @@ def write_srt(path: str | Path, entries: list[tuple[int, int, str]]) -> None:
 _TS_RE = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
 
+def _wrap_subtitle_line(text: str, max_chars: int = 20) -> str:
+    """Wrap a long subtitle text into short lines suitable for display.
+
+    Splits at natural breakpoints (periods, commas) and falls back to
+    character-count splitting if no good breakpoint exists.
+    """
+    if len(text) <= max_chars:
+        return text
+    breakpoints = "，。！？、；,.!?;:："
+    result_lines = []
+    remaining = text
+    while len(remaining) > max_chars:
+        # Try to find a natural breakpoint within the first max_chars+10 chars
+        search_end = min(len(remaining), max_chars + 10)
+        last_bp = -1
+        for i in range(max_chars, min(len(remaining), search_end)):
+            if remaining[i] in breakpoints:
+                last_bp = i
+                break
+        if last_bp >= 0:
+            result_lines.append(remaining[:last_bp + 1])
+            remaining = remaining[last_bp + 1:]
+        else:
+            # No good breakpoint, force-split at max_chars
+            result_lines.append(remaining[:max_chars])
+            remaining = remaining[max_chars:]
+    if remaining:
+        result_lines.append(remaining)
+    return "\n".join(result_lines)
+
+
 def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:
     """LLMs sometimes write `01:00:01` when they mean `00:01:01` (carry into hour
     instead of minute). Detect that by checking if the value exceeds the video
@@ -105,6 +136,7 @@ def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
     - Detects the "hour carry" bug where `00:01:XX` is written as `01:00:XX`
       and rewrites by swapping h/m when the original value would exceed
       max_duration_ms.
+    - Wraps long subtitle text into short lines (≤20 chars) for readability.
     """
     blocks = re.split(r"\n\s*\n", text.strip())
     fixed_blocks: list[str] = []
@@ -125,5 +157,7 @@ def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
         start_ms = _fix_carry_bug(h1, m1, s1, ms1, cap)
         end_ms = _fix_carry_bug(h2, m2, s2, ms2, cap)
         lines[1] = f"{ms_to_ts(start_ms)} --> {ms_to_ts(end_ms)}"
-        fixed_blocks.append("\n".join(lines))
+        # Wrap long text lines (skip the index line and timestamp line)
+        wrapped = [_wrap_subtitle_line(l, max_chars=20) for l in lines[2:]]
+        fixed_blocks.append("\n".join(lines[:2] + [w for line in wrapped for w in line.split("\n")]))
     return "\n\n".join(fixed_blocks) + "\n"
