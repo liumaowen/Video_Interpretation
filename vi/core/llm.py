@@ -277,6 +277,7 @@ def align_narration(
     subtitle_path: Path,
     out_path: Path,
     n_segments: int = 3,
+    char_limits: list[int] | None = None,
     model: str = "qwen2.5:7b",
     api_key: str = "",
     api_key_env: str = "OPENAI_API_KEY",
@@ -287,10 +288,12 @@ def align_narration(
     client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
     narration = narration_path.read_text(encoding="utf-8").strip()
     windows = _segment_subtitle_windows(subtitle_path, n_segments)
-    windows_text = "\n".join(
-        f"  第 {i+1} 段：{ms_to_ts(s)} --> {ms_to_ts(e)}"
-        for i, (s, e) in enumerate(windows)
-    )
+    windows_text_lines = []
+    for i, (s, e) in enumerate(windows):
+        dur = (e - s) // 1000
+        char_info = f"（最多 {char_limits[i]} 字）" if char_limits else ""
+        windows_text_lines.append(f"  第 {i+1} 段：{ms_to_ts(s)} --> {ms_to_ts(e)}  时长 {dur} 秒 {char_info}")
+    windows_text = "\n".join(windows_text_lines)
 
     user_text = llm_prompts.ALIGN_USER_TEMPLATE.format(
         narration=narration,

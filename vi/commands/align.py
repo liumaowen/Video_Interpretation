@@ -30,11 +30,23 @@ def run(args: argparse.Namespace) -> int:
             print("subtitle.srt required for --llm alignment. Run `transcribe` first.")
             return 2
         from ..core.llm import align_narration
+        from ..core.srt import parse_srt, ms_to_ts
+        # Calculate per-segment character limits based on duration (~3.5 chars/sec for Chinese)
+        entries = parse_srt(subtitle)
+        total_ms = entries[-1][2] if entries else 60000
+        n = config.get(cfg, "llm.n_segments", 3)
+        window = total_ms // n
+        char_limits = []
+        for i in range(n):
+            end_ms = (i + 1) * window if i < n - 1 else total_ms
+            duration_sec = (end_ms - i * window) // 1000
+            char_limits.append(max(10, int(duration_sec * 3.5)))
         align_narration(
             narration_path=narration,
             subtitle_path=subtitle,
             out_path=out,
-            n_segments=config.get(cfg, "llm.n_segments", 3),
+            n_segments=n,
+            char_limits=char_limits,
             model=config.get(cfg, "llm.model", "qwen2.5:7b"),
             api_key=config.get(cfg, "llm.api_key", ""),
             api_key_env=config.get(cfg, "llm.api_key_env", "OPENAI_API_KEY"),
