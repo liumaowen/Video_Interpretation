@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 .cache/
+.cargo/
 
 # HuggingFace
 .huggingface/
