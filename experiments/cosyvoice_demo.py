@@ -1,19 +1,23 @@
-"""A/B compare CosyVoice 2 (ModelScope) vs edge-tts on the same Chinese text.
+"""A/B compare CosyVoice 2 (ModelScope, zero-shot) vs edge-tts on the same text.
 
 Run from repo root:
-    python experiments/cosyvoice_demo.py
-    python experiments/cosyvoice_demo.py --voice 中文女
-    python experiments/cosyvoice_demo.py --text "自定义文本"
-    python experiments/cosyvoice_demo.py --from-project my_first       # load first 3 segs
+    python experiments/cosyvoice_demo.py                          # default: zero-shot w/ bundled prompt
+    python experiments/cosyvoice_demo.py --from-project my_first
+    python experiments/cosyvoice_demo.py --prompt-audio my.wav --prompt-text "我的样本台词"
+    python experiments/cosyvoice_demo.py --sft-voice 中文男       # SFT mode (requires CosyVoice-300M-SFT)
+
+CosyVoice2-0.5B is the *base* model — it only supports zero-shot voice cloning.
+For built-in voice presets (中文男/中文女/...), use iic/CosyVoice-300M-SFT instead
+and pass --sft-voice + --model-dir.
 
 First run downloads iic/CosyVoice2-0.5B (~2GB) to .cache/models/CosyVoice2-0.5B/.
 
 Setup (one-time):
-    pip install modelscope torch torchaudio hyperpyyaml onnxruntime soundfile
+    pip install modelscope torch torchaudio hyperpyyaml onnxruntime soundfile \\
+                conformer lightning diffusers inflect WeTextProcessing openai-whisper
     git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git third_party/CosyVoice
-    # If you already cloned without --recursive:
+    # If you cloned without --recursive:
     #   cd third_party/CosyVoice && git submodule update --init --recursive
-    pip install -r third_party/CosyVoice/requirements.txt
 """
 import argparse
 import asyncio
@@ -33,13 +37,13 @@ DEFAULT_TEXT = (
     "他们的命运将何去何从？"
 )
 
+# Bundled prompt that ships with the CosyVoice repo's asset/ directory
+DEFAULT_PROMPT_TEXT = "希望你以后能够做的比我还好呦。"
+DEFAULT_PROMPT_REL = Path("asset") / "zero_shot_prompt.wav"
+
 
 def setup_cosyvoice_path() -> Path | None:
-    """Add the local CosyVoice clone *and* its Matcha-TTS submodule to sys.path.
-
-    CosyVoice imports `matcha.*` directly from its bundled submodule at
-    `third_party/Matcha-TTS`, so both paths must be importable.
-    """
+    """Add the local CosyVoice clone *and* its Matcha-TTS submodule to sys.path."""
     cv_root = None
     for candidate in (REPO_ROOT / "third_party" / "CosyVoice", REPO_ROOT / "CosyVoice"):
         if candidate.exists():
@@ -63,7 +67,6 @@ def setup_cosyvoice_path() -> Path | None:
 
 
 def load_text_from_project(name: str, n_segments: int = 5) -> str:
-    """Concatenate the first n segments of a project's narration_aligned.txt."""
     aligned = REPO_ROOT / "projects" / name / "narration_aligned.txt"
     if not aligned.exists():
         raise SystemExit(f"Not found: {aligned}")
@@ -77,44 +80,77 @@ def load_text_from_project(name: str, n_segments: int = 5) -> str:
     return "".join(texts)
 
 
-def download_cosyvoice_model(model_dir: Path) -> None:
+def download_cosyvoice_model(model_id: str, model_dir: Path) -> None:
     if model_dir.exists() and any(model_dir.iterdir()):
         return
-    print(f"Downloading iic/CosyVoice2-0.5B → {model_dir} (one-time, ~2GB)")
+    print(f"Downloading {model_id} → {model_dir} (one-time)")
     from modelscope import snapshot_download
     model_dir.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_download("iic/CosyVoice2-0.5B", local_dir=str(model_dir))
+    snapshot_download(model_id, local_dir=str(model_dir))
 
 
-def synth_cosyvoice(text: str, voice: str, model_dir: Path, out_path: Path) -> None:
-    cv_path = setup_cosyvoice_path()
+def _load_cosyvoice_class(use_v2: bool):
+    setup_cosyvoice_path()
     try:
-        from cosyvoice.cli.cosyvoice import CosyVoice2
+        from cosyvoice.cli.cosyvoice import CosyVoice2, CosyVoice
     except ImportError as e:
         raise SystemExit(
             f"CosyVoice import failed: {e}\n"
             "Setup:\n"
-            "  git clone https://github.com/FunAudioLLM/CosyVoice.git third_party/CosyVoice\n"
-            "  pip install -r third_party/CosyVoice/requirements.txt"
+            "  pip install conformer lightning diffusers inflect WeTextProcessing openai-whisper\n"
+            "  cd third_party/CosyVoice && git submodule update --init --recursive"
         )
+    return CosyVoice2 if use_v2 else CosyVoice
+
+
+def synth_cosyvoice(
+    text: str,
+    model_dir: Path,
+    out_path: Path,
+    *,
+    sft_voice: str | None = None,
+    prompt_audio: Path | None = None,
+    prompt_text: str = DEFAULT_PROMPT_TEXT,
+    use_v2: bool = True,
+    model_id: str = "iic/CosyVoice2-0.5B",
+) -> None:
+    Klass = _load_cosyvoice_class(use_v2)
     import torch
     import torchaudio
 
-    download_cosyvoice_model(model_dir)
+    download_cosyvoice_model(model_id, model_dir)
 
-    print(f"Loading CosyVoice 2 from {model_dir.name} (cold start ~30s)…")
-    model = CosyVoice2(str(model_dir), load_jit=False, load_trt=False, fp16=False)
+    print(f"Loading {Klass.__name__} from {model_dir.name} (cold start ~30s)…")
+    model = Klass(str(model_dir), load_jit=False, load_trt=False, fp16=False)
 
-    available = list(model.list_available_spks()) if hasattr(model, "list_available_spks") else []
-    if available and voice not in available:
-        print(f"  ⚠ voice '{voice}' not in pretrained set: {available}")
-        print(f"  Falling back to: {available[0]}")
-        voice = available[0]
+    if sft_voice:
+        available = list(model.list_available_spks()) if hasattr(model, "list_available_spks") else []
+        if not available:
+            raise SystemExit(
+                f"Model at {model_dir.name} has no built-in SFT speakers.\n"
+                f"CosyVoice 2 base only supports zero-shot. For preset voices use:\n"
+                f"  --model-dir .cache/models/CosyVoice-300M-SFT --sft-voice 中文男\n"
+                f"  (will auto-download iic/CosyVoice-300M-SFT)"
+            )
+        if sft_voice not in available:
+            raise SystemExit(f"Voice '{sft_voice}' not available. Choose from: {available}")
+        print(f"Synthesizing SFT [voice={sft_voice}, {len(text)} chars]…")
+        gen = model.inference_sft(text, sft_voice, stream=False)
+    else:
+        if prompt_audio is None or not prompt_audio.exists():
+            raise SystemExit(
+                f"Prompt audio not found: {prompt_audio}\n"
+                f"Pass --prompt-audio <wav> --prompt-text '<台词>', "
+                f"or make sure CosyVoice's bundled asset/zero_shot_prompt.wav exists."
+            )
+        from cosyvoice.utils.file_utils import load_wav
+        prompt_speech = load_wav(str(prompt_audio), 16000)
+        print(f"Synthesizing zero-shot [prompt={prompt_audio.name}, {len(text)} chars]…")
+        gen = model.inference_zero_shot(text, prompt_text, prompt_speech, stream=False)
 
-    print(f"Synthesizing CosyVoice [voice={voice}, {len(text)} chars]…")
-    chunks = []
-    for piece in model.inference_sft(text, voice, stream=False):
-        chunks.append(piece["tts_speech"])
+    chunks = [piece["tts_speech"] for piece in gen]
+    if not chunks:
+        raise SystemExit("CosyVoice returned no audio chunks.")
     audio = torch.cat(chunks, dim=1) if len(chunks) > 1 else chunks[0]
     torchaudio.save(str(out_path), audio, model.sample_rate)
 
@@ -130,8 +166,6 @@ async def synth_edge_tts(text: str, voice: str, out_path: Path) -> None:
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 f.write(chunk["data"])
-
-    # Re-encode to 24kHz wav so the two outputs have matching sample rate
     subprocess.run(
         ["ffmpeg", "-y", "-i", str(mp3_path), "-ar", "24000", str(out_path)],
         check=True, capture_output=True,
@@ -148,28 +182,38 @@ def report(label: str, path: Path) -> None:
         import torchaudio
         info = torchaudio.info(str(path))
         dur = info.num_frames / info.sample_rate
-        print(f"  {label:18}  {dur:5.1f}s  {size_kb:6.0f} KB  {info.sample_rate} Hz  → {path}")
+        print(f"  {label:24}  {dur:5.1f}s  {size_kb:6.0f} KB  {info.sample_rate} Hz  → {path}")
     except Exception:
-        print(f"  {label:18}  {size_kb:6.0f} KB  → {path}")
+        print(f"  {label:24}  {size_kb:6.0f} KB  → {path}")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--text", help="Text to synthesize (overrides --from-project and default)")
+    p.add_argument("--text", help="Text to synthesize (overrides --from-project)")
     p.add_argument("--from-project", help="Use first N segments of projects/<name>/narration_aligned.txt")
     p.add_argument("--segments", type=int, default=5,
-                   help="With --from-project, how many segments to concatenate (default 5)")
-    p.add_argument("--voice", default="中文男",
-                   help="CosyVoice SFT preset: 中文男 / 中文女 / 粤语女 / 英文男 / 英文女 / 日语男 / 韩语女")
-    p.add_argument("--edge-voice", default="zh-CN-YunjianNeural",
-                   help="edge-tts voice for baseline")
-    p.add_argument("--skip-cosy", action="store_true", help="Skip CosyVoice synthesis")
-    p.add_argument("--skip-edge", action="store_true", help="Skip edge-tts baseline")
-    p.add_argument("--model-dir", default=".cache/models/CosyVoice2-0.5B",
-                   help="CosyVoice model cache dir (relative to repo root)")
+                   help="With --from-project, segments to concatenate (default 5)")
+
+    p.add_argument("--sft-voice", help="SFT preset (only works with CosyVoice-300M-SFT model)")
+    p.add_argument("--prompt-audio",
+                   help="Reference WAV for zero-shot cloning "
+                        "(default: third_party/CosyVoice/asset/zero_shot_prompt.wav)")
+    p.add_argument("--prompt-text", default=DEFAULT_PROMPT_TEXT,
+                   help=f"Text spoken in the prompt audio (default matches bundled prompt)")
+
+    p.add_argument("--model-id", default="iic/CosyVoice2-0.5B",
+                   help="ModelScope id (e.g. iic/CosyVoice2-0.5B, iic/CosyVoice-300M-SFT)")
+    p.add_argument("--model-dir", default=None,
+                   help="Local cache dir (default: .cache/models/<model_id>)")
+    p.add_argument("--cosy-v1", action="store_true",
+                   help="Use CosyVoice (v1) class instead of CosyVoice2 (needed for *-300M-* models)")
+
+    p.add_argument("--edge-voice", default="zh-CN-YunjianNeural")
+    p.add_argument("--skip-cosy", action="store_true")
+    p.add_argument("--skip-edge", action="store_true")
     args = p.parse_args()
 
-    # Resolve text source
+    # Resolve text
     if args.text:
         text = args.text
     elif args.from_project:
@@ -177,23 +221,47 @@ def main() -> int:
     else:
         text = DEFAULT_TEXT
 
+    # Resolve model_dir default from model_id
+    if args.model_dir is None:
+        args.model_dir = f".cache/models/{Path(args.model_id).name}"
+    model_dir = REPO_ROOT / args.model_dir
+
+    # Resolve prompt audio default (only matters for zero-shot)
+    if not args.sft_voice and not args.prompt_audio:
+        cv_root = setup_cosyvoice_path()
+        if cv_root is not None:
+            args.prompt_audio = cv_root / DEFAULT_PROMPT_REL
+    prompt_audio = Path(args.prompt_audio) if args.prompt_audio else None
+
     out_dir = REPO_ROOT / "experiments" / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
-    model_dir = REPO_ROOT / args.model_dir
 
     preview = text if len(text) <= 80 else text[:77] + "..."
     print(f"\nText ({len(text)} chars): {preview}\n")
 
-    cosy_out = out_dir / f"cosyvoice_{args.voice}.wav"
+    if args.sft_voice:
+        cosy_out = out_dir / f"cosyvoice_sft_{args.sft_voice}.wav"
+        cosy_label = f"CosyVoice/SFT/{args.sft_voice}"
+    else:
+        prompt_name = prompt_audio.stem if prompt_audio else "noprompt"
+        cosy_out = out_dir / f"cosyvoice_zs_{prompt_name}.wav"
+        cosy_label = f"CosyVoice/ZeroShot/{prompt_name}"
     edge_out = out_dir / f"edge_{args.edge_voice}.wav"
 
     if not args.skip_cosy:
-        synth_cosyvoice(text, args.voice, model_dir, cosy_out)
+        synth_cosyvoice(
+            text, model_dir, cosy_out,
+            sft_voice=args.sft_voice,
+            prompt_audio=prompt_audio,
+            prompt_text=args.prompt_text,
+            use_v2=not args.cosy_v1,
+            model_id=args.model_id,
+        )
     if not args.skip_edge:
         asyncio.run(synth_edge_tts(text, args.edge_voice, edge_out))
 
-    print(f"\n--- Output ---")
-    report(f"CosyVoice/{args.voice}", cosy_out)
+    print("\n--- Output ---")
+    report(cosy_label, cosy_out)
     report(f"edge-tts/{args.edge_voice}", edge_out)
     print(f"\nListen and compare WAVs in: {out_dir}")
     return 0
