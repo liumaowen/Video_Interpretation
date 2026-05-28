@@ -19,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name, helptext in [
         ("transcribe", "Transcribe source video to English SRT (whisper)"),
         ("refine", "Re-split SRT from whisper JSON for finer cuts"),
+        ("translate", "Translate subtitle.srt to Chinese subtitle_zh.srt via LLM"),
         ("llm-narrate", "Generate Chinese narration via Claude API"),
         ("align", "Add timestamps to narration.txt"),
         ("preview-srt", "Build a preview SRT from narration_aligned.txt (no TTS)"),
@@ -53,6 +54,7 @@ def main() -> int:
     lazy_map = {
         "transcribe": "vi.commands.transcribe",
         "refine": "vi.commands.refine",
+        "translate": "vi.commands.translate",
         "llm-narrate": "vi.commands.llm_narrate",
         "align": "vi.commands.align",
         "preview-srt": "vi.commands.preview_srt",

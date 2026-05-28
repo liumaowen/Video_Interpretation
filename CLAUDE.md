@@ -21,9 +21,10 @@ python main.py ls [-l]
 # 一键跑完全流程
 python main.py all <name>
 
-# 各个步骤（完整流程：transcribe → refine → tts → build）
+# 各个步骤（完整流程：transcribe → refine → translate → tts → build）
 python main.py transcribe [name]   # ASR：默认 faster-whisper；可选 --engine funasr 走 SenseVoice + FSMN-VAD
 python main.py refine [name]       # 重新切分 SRT（仅 --engine exe 需要；其他引擎已直出合理粒度，all 会自动跳过）
+python main.py translate [name]    # 通过 LLM 把 subtitle.srt 翻译成 subtitle_zh.srt（保留时间戳），build 会优先用中文版本
 python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 ModelScope/Qwen3；支持 --srt 一步式、--vision 视觉理解）
 python main.py align [name]        # 为解说稿标注时间轴
 python main.py tts [name]          # 通过 edge-tts 合成配音
@@ -49,6 +50,7 @@ vi/
 │   ├── ls.py           # 列出项目
 │   ├── transcribe.py   # ASR 转录
 │   ├── refine.py       # SRT 重新切分
+│   ├── translate.py    # 字幕英译中（subtitle.srt → subtitle_zh.srt）
 │   ├── llm_narrate.py  # LLM 解说稿生成
 │   ├── align.py        # 时间轴对齐
 │   ├── preview_srt.py  # SRT 预览（不跑 TTS）

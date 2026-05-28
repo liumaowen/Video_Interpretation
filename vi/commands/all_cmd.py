@@ -4,10 +4,11 @@ import importlib
 
 from .. import paths
 
-STEPS = ["transcribe", "refine", "tts", "build"]
+STEPS = ["transcribe", "refine", "translate", "tts", "build"]
 MODULES = {
     "transcribe": "vi.commands.transcribe",
     "refine": "vi.commands.refine",
+    "translate": "vi.commands.translate",
     "tts": "vi.commands.tts",
     "build": "vi.commands.build",
 }

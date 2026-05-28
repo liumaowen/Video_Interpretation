@@ -6,7 +6,7 @@ from .. import paths
 
 INTERMEDIATE = ["_tts_tmp", "_temp_video.mp4", "_orig_sub.srt", "_narr_sub.srt",
                 "voice.wav", "narration_subtitle.srt", "narration_preview.srt"]
-DEEP_EXTRA = ["subtitle.srt", "source.json", "output.mp4"]
+DEEP_EXTRA = ["subtitle.srt", "subtitle_zh.srt", "source.json", "output.mp4"]
 
 
 def configure(p: argparse.ArgumentParser):

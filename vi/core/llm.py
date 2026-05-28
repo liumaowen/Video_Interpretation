@@ -11,10 +11,11 @@ Configuration via config.toml [llm]:
   api_key_env = "OPENAI_API_KEY"  # or any env var; Ollama can use "dummy"
 """
 import os
+import re
 import sys
 from pathlib import Path
 
-from .srt import parse_srt, ms_to_ts, sanitize_srt_text
+from .srt import parse_srt, ms_to_ts, sanitize_srt_text, write_srt
 from . import llm_prompts
 
 
@@ -306,3 +307,57 @@ def align_narration(
     out_path.write_text(result, encoding="utf-8")
     print(f"Wrote {out_path}")
     print("  ⚠ LLM 对齐为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
+
+
+_TRANSLATE_LINE_RE = re.compile(r"^\s*(\d+)\s*[.\．、:：)]\s*(.+?)\s*$")
+
+
+def translate_srt(
+    src_path: Path,
+    out_path: Path,
+    model: str = "qwen2.5:7b",
+    api_key: str = "",
+    api_key_env: str = "OPENAI_API_KEY",
+    provider: str = "openai_compatible",
+    base_url: str = "",
+) -> int:
+    """Translate an English SRT into Chinese, preserving every timestamp.
+
+    Missing or unparseable lines fall back to the original English text so the
+    output SRT is never shorter than the input.
+    """
+    entries = parse_srt(src_path)
+    if not entries:
+        raise SystemExit(f"No entries parsed from {src_path}")
+
+    client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
+
+    numbered = "\n".join(f"{i}. {text}" for i, (_, _, _, text) in enumerate(entries, 1))
+    user_text = llm_prompts.TRANSLATE_SRT_USER_TEMPLATE.format(numbered_text=numbered)
+
+    print(f"Calling {model} to translate {len(entries)} entries...", file=sys.stderr)
+    result = _stream_and_collect(
+        call_fn, client, model, llm_prompts.TRANSLATE_SRT_SYSTEM, user_text
+    )
+
+    translations: dict[int, str] = {}
+    for line in result.splitlines():
+        m = _TRANSLATE_LINE_RE.match(line)
+        if m:
+            translations[int(m.group(1))] = m.group(2).strip()
+
+    missing = [i for i in range(1, len(entries) + 1) if i not in translations]
+    if missing:
+        print(
+            f"  ⚠ Missing {len(missing)} translation(s); falling back to English for: "
+            f"{missing[:10]}{'...' if len(missing) > 10 else ''}",
+            file=sys.stderr,
+        )
+
+    out_entries = [
+        (s, e, translations.get(i, text))
+        for i, (_, s, e, text) in enumerate(entries, 1)
+    ]
+    write_srt(out_path, out_entries)
+    print(f"Wrote {out_path} ({len(out_entries)} entries)")
+    return len(out_entries)

@@ -18,7 +18,11 @@ def run(args: argparse.Namespace) -> int:
     video_name = config.get(cfg, "source.video")
     video_path = pdir / video_name
     voice_path = pdir / "voice.wav"
-    srt_orig = pdir / "subtitle.srt"
+    # Prefer the Chinese-translated subtitle when present; the English ASR
+    # output stays around so llm-narrate can still read it.
+    srt_orig_zh = pdir / "subtitle_zh.srt"
+    srt_orig_en = pdir / "subtitle.srt"
+    srt_orig = srt_orig_zh if srt_orig_zh.exists() else srt_orig_en
     srt_narr = pdir / "narration_subtitle.srt"
 
     missing = [p for p in [video_path, voice_path, srt_orig, srt_narr] if not p.exists()]
@@ -27,6 +31,9 @@ def run(args: argparse.Namespace) -> int:
         for p in missing:
             print(f"  {p}")
         return 2
+
+    if srt_orig.name == "subtitle_zh.srt":
+        print(f"Using translated subtitle: {srt_orig.name}")
 
     bgm_arg = args.bgm or config.get(cfg, "mix.bgm_path", "shared/bgm/default.mp3")
     bgm_path = (paths.root() / bgm_arg).resolve()

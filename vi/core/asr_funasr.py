@@ -24,7 +24,10 @@ from .srt import write_srt
 
 # Tolerate whitespace inside tags (ct-punc tokenizes "<|en|>" as "< | en | >").
 _TAG_RE = re.compile(r"<\s*\|[^|<>]*\|\s*>")
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?。！？])\s+")
+# Sentence-ending vs soft-pause punctuation for splitting long SRT lines.
+_END_PUNCT_RE = re.compile(r"(?<=[.!?。！？])\s+")
+_SOFT_PUNCT_RE = re.compile(r"(?<=[,;:，；：、])\s+")
+_MAX_LINE_CHARS = 60
 # Each SenseVoice chunk starts with a language tag. Split on lookahead so the
 # tag stays attached to the chunk it introduces.
 _LANG_TAG_LOOKAHEAD = re.compile(
@@ -63,28 +66,73 @@ def _vad_only_timestamps(
     return [(int(s), int(e)) for s, e in value if int(e) > int(s)]
 
 
+def _hard_split_words(text: str, max_chars: int) -> list[str]:
+    """Greedy word-boundary split when no punctuation is available."""
+    words = text.split()
+    if not words:
+        return []
+    out: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for w in words:
+        add = len(w) + (1 if cur else 0)
+        if cur_len + add > max_chars and cur:
+            out.append(" ".join(cur))
+            cur, cur_len = [w], len(w)
+        else:
+            cur.append(w)
+            cur_len += add
+    if cur:
+        out.append(" ".join(cur))
+    return out
+
+
+def _split_text_cascade(text: str, max_chars: int) -> list[str]:
+    """Split overlong text: sentence-end → soft-pause → word-boundary hard split."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return [text] if text else []
+
+    out: list[str] = []
+    for part in _END_PUNCT_RE.split(text):
+        part = part.strip()
+        if not part:
+            continue
+        if len(part) <= max_chars:
+            out.append(part)
+            continue
+        # Sentence still too long → try soft pauses.
+        for sub in _SOFT_PUNCT_RE.split(part):
+            sub = sub.strip()
+            if not sub:
+                continue
+            if len(sub) <= max_chars:
+                out.append(sub)
+            else:
+                out.extend(_hard_split_words(sub, max_chars))
+    return out or [text]
+
+
 def _split_long_segment(
     text: str,
     start_ms: int,
     end_ms: int,
-    max_chars: int = 80,
+    max_chars: int = _MAX_LINE_CHARS,
 ) -> list[tuple[int, int, str]]:
-    """Split an over-long segment at sentence punctuation, distributing time
-    proportionally to character count. Keeps short segments intact."""
-    text = text.strip()
-    if len(text) <= max_chars:
-        return [(start_ms, end_ms, text)]
+    """Split an over-long segment, distributing time proportionally to character count."""
+    pieces = _split_text_cascade(text, max_chars)
+    if len(pieces) <= 1:
+        return [(start_ms, end_ms, pieces[0] if pieces else text.strip())]
 
-    parts = [p.strip() for p in _SENTENCE_END_RE.split(text) if p.strip()]
-    if len(parts) <= 1:
-        return [(start_ms, end_ms, text)]
+    total_chars = sum(len(p) for p in pieces)
+    if total_chars == 0:
+        return [(start_ms, end_ms, text.strip())]
 
-    total_chars = sum(len(p) for p in parts)
     out: list[tuple[int, int, str]] = []
     cursor = start_ms
     duration = end_ms - start_ms
-    for i, p in enumerate(parts):
-        if i == len(parts) - 1:
+    for i, p in enumerate(pieces):
+        if i == len(pieces) - 1:
             out.append((cursor, end_ms, p))
         else:
             dur = int(duration * len(p) / total_chars)
@@ -236,11 +284,11 @@ def transcribe(
                         f"chunks — pairing the first {min(len(parts), len(chunks))}."
                     )
                 n = min(len(parts), len(chunks))
-                entries = [
-                    (chunks[i][0], chunks[i][1], parts[i])
-                    for i in range(n)
-                    if parts[i]
-                ]
+                for i in range(n):
+                    if parts[i]:
+                        entries.extend(
+                            _split_long_segment(parts[i], chunks[i][0], chunks[i][1])
+                        )
 
     if not entries:
         print("DEBUG raw res:", res)
