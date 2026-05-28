@@ -155,7 +155,7 @@ def transcribe(
         batch_size_s=60,
         merge_vad=False,
     )
-
+    print("DEBUG raw res:", res)
     entries = _entries_from_result(res)
     if not entries:
         raise SystemExit(
