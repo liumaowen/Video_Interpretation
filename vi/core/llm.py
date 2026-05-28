@@ -15,7 +15,7 @@ import re
 import sys
 from pathlib import Path
 
-from .srt import parse_srt, ms_to_ts, sanitize_srt_text, write_srt
+from .srt import parse_srt, ms_to_ts, write_srt
 from . import llm_prompts
 
 
@@ -251,9 +251,46 @@ def generate_narration_srt(
     result = _stream_and_collect(
         call_fn, client, model, llm_prompts.NARRATE_SRT_SYSTEM, user_text
     )
-    result = sanitize_srt_text(result, max_duration_ms=duration_sec * 1000)
-    out_path.write_text(result, encoding="utf-8")
-    print(f"Wrote {out_path}")
+
+    # Re-process: split each block into subtitle-sized chunks (≤60 chars)
+    # mirroring whisper_py.group_words so the output is actually readable.
+    from ..core.srt import split_narration_text, write_srt
+    _blocks = re.split(r"\n\s*\n", result.strip())
+    final_entries = []
+    for block in _blocks:
+        lines = [l.rstrip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 3:
+            continue
+        m = re.match(
+            r"\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*",
+            lines[1],
+        )
+        if not m:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+        start_ms = (h1 * 3600 + m1 * 60 + s1) * 1000 + ms1
+        end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
+        text = "".join(l.strip() for l in lines[2:])
+
+        chunks = split_narration_text(text)
+        if len(chunks) == 1:
+            final_entries.append((start_ms, end_ms, chunks[0]))
+            continue
+
+        total_dur = end_ms - start_ms
+        chunk_dur = total_dur // len(chunks)
+        if chunk_dur < 800:
+            chunk_dur = 800
+        cur = start_ms
+        for chunk in chunks:
+            chunk_end = cur + chunk_dur
+            if chunk_end > end_ms:
+                chunk_end = end_ms
+            final_entries.append((cur, chunk_end, chunk))
+            cur = chunk_end
+
+    write_srt(out_path, final_entries)
+    print(f"Wrote {out_path} ({len(final_entries)} entries)")
     print("  ⚠ LLM 生成为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
 
 
@@ -284,7 +321,12 @@ def align_narration(
     provider: str = "openai_compatible",
     base_url: str = "",
 ) -> None:
-    """Split narration.txt into n_segments timed blocks → narration_aligned.txt."""
+    """Split narration.txt into n_segments timed blocks → narration_aligned.txt.
+
+    Uses LLM to draft the alignment, then re-splits each block using the same
+    sentence-aware algorithm as whisper_py.group_words (≤60 chars per chunk,
+    split at punctuation, ≥800ms per entry).
+    """
     client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
     narration = narration_path.read_text(encoding="utf-8").strip()
     windows = _segment_subtitle_windows(subtitle_path, n_segments)
@@ -305,10 +347,49 @@ def align_narration(
     result = _stream_and_collect(
         call_fn, client, model, llm_prompts.ALIGN_SYSTEM, user_text
     )
+
+    # Re-process: split each block's text into subtitle-sized chunks using
+    # the same sentence-aware algorithm as the English ASR subtitles.
+    from ..core.srt import split_narration_text, write_srt
+    _blocks = re.split(r"\n\s*\n", result.strip())
+    final_entries = []
+    for block in _blocks:
+        lines = [l.rstrip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 3:
+            continue
+        m = re.match(
+            r"\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*",
+            lines[1],
+        )
+        if not m:
+            continue
+        h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, m.groups())
+        start_ms = (h1 * 3600 + m1 * 60 + s1) * 1000 + ms1
+        end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
+        text = "".join(l.strip() for l in lines[2:])
+
+        # Split text into ≤60 char chunks at natural breakpoints (mirrors whisper_py)
+        chunks = split_narration_text(text)
+        if len(chunks) == 1:
+            final_entries.append((start_ms, end_ms, chunks[0]))
+            continue
+
+        # Distribute chunks evenly across the time window, ≥800ms each
+        total_dur = end_ms - start_ms
+        chunk_dur = total_dur // len(chunks)
+        if chunk_dur < 800:
+            chunk_dur = 800
+        cur = start_ms
+        for chunk in chunks:
+            chunk_end = cur + chunk_dur
+            if chunk_end > end_ms:
+                chunk_end = end_ms
+            final_entries.append((cur, chunk_end, chunk))
+            cur = chunk_end
+
     total_ms = windows[-1][1] if windows else 0
-    result = sanitize_srt_text(result, max_duration_ms=total_ms)
-    out_path.write_text(result, encoding="utf-8")
-    print(f"Wrote {out_path}")
+    write_srt(out_path, final_entries)
+    print(f"Wrote {out_path} ({len(final_entries)} entries)")
     print("  ⚠ LLM 对齐为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
 
 

@@ -83,36 +83,90 @@ def write_srt(path: str | Path, entries: list[tuple[int, int, str]]) -> None:
 
 _TS_RE = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
+# Constants mirroring whisper_py.group_words — proven to produce readable subtitles
+NARRATION_MAX_CHARS = 60
+NARRATION_MIN_DURATION_MS = 800
+NARRATION_END_PUNCT = set("。！？")
+NARRATION_SOFT_PUNCT = set("，；、")
 
-def _wrap_subtitle_line(text: str, max_chars: int = 20) -> str:
-    """Wrap a long subtitle text into short lines suitable for display.
 
-    Splits at natural breakpoints (periods, commas) and falls back to
-    character-count splitting if no good breakpoint exists.
+def _split_narration_sentences(text: str) -> list[str]:
+    """Split narration at sentence terminators (。！？), mirroring whisper_py Step 1."""
+    sentences = []
+    cur = ""
+    for ch in text:
+        cur += ch
+        if ch in NARRATION_END_PUNCT:
+            sentences.append(cur)
+            cur = ""
+    if cur.strip():
+        sentences.append(cur)
+    return [s for s in sentences if s]
+
+
+def _split_long_sentence(sent: str) -> list[str]:
+    """Split a single long sentence at soft punctuation, mirroring whisper_py Step 2."""
+    if len(sent) <= NARRATION_MAX_CHARS:
+        return [sent]
+
+    split_indices = []
+    chars = list(sent)
+    for i, ch in enumerate(chars[:-1]):
+        if ch in NARRATION_SOFT_PUNCT:
+            split_indices.append(i)
+
+    if not split_indices:
+        mid = len(chars) // 2
+        split_indices = [mid]
+
+    # Build sub-groups from split points nearest to the middle first
+    segments = []
+    start = 0
+    for idx in sorted(split_indices):
+        chunk = sent[start:idx + 1]
+        if len(chunk) <= NARRATION_MAX_CHARS and len(chunk) > 0:
+            segments.append(chunk)
+            start = idx + 1
+
+    if start < len(sent):
+        tail = sent[start:]
+        if segments and len(tail) <= NARRATION_MAX_CHARS:
+            segments.append(tail)
+        elif len(tail) > NARRATION_MAX_CHARS:
+            # Force-split tail
+            while len(tail) > NARRATION_MAX_CHARS:
+                segments.append(tail[:NARRATION_MAX_CHARS])
+                tail = tail[NARRATION_MAX_CHARS:]
+            if tail:
+                segments.append(tail)
+
+    return segments if segments else [sent[:NARRATION_MAX_CHARS]]
+
+
+def split_narration_text(text: str) -> list[str]:
+    """Sentence-aware splitting of narration text, same logic as whisper_py.group_words.
+
+    Returns a list of text chunks, each ≤60 chars, split at natural breakpoints.
     """
-    if len(text) <= max_chars:
-        return text
-    breakpoints = "，。！？、；,.!?;:："
-    result_lines = []
-    remaining = text
-    while len(remaining) > max_chars:
-        # Try to find a natural breakpoint within the first max_chars+10 chars
-        search_end = min(len(remaining), max_chars + 10)
-        last_bp = -1
-        for i in range(max_chars, min(len(remaining), search_end)):
-            if remaining[i] in breakpoints:
-                last_bp = i
-                break
-        if last_bp >= 0:
-            result_lines.append(remaining[:last_bp + 1])
-            remaining = remaining[last_bp + 1:]
+    # Step 1: split into sentences at end punctuation
+    sentences = _split_narration_sentences(text)
+
+    # Step 2: split long sentences at soft punctuation
+    parts = []
+    for sent in sentences:
+        parts.extend(_split_long_sentence(sent))
+
+    # Step 3: merge very short chunks with next one (mirrors MIN_DURATION_MS merge)
+    merged = []
+    for chunk in parts:
+        if merged and len(chunk.strip()) <= 5:
+            merged[-1] = merged[-1].rstrip() + chunk
+        elif merged and len(merged[-1]) + len(chunk.strip()) <= NARRATION_MAX_CHARS and len(chunk.strip()) <= 8:
+            merged[-1] = merged[-1].rstrip() + chunk
         else:
-            # No good breakpoint, force-split at max_chars
-            result_lines.append(remaining[:max_chars])
-            remaining = remaining[max_chars:]
-    if remaining:
-        result_lines.append(remaining)
-    return "\n".join(result_lines)
+            merged.append(chunk)
+
+    return merged
 
 
 def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:
@@ -136,11 +190,9 @@ def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
     - Detects the "hour carry" bug where `00:01:XX` is written as `01:00:XX`
       and rewrites by swapping h/m when the original value would exceed
       max_duration_ms.
-    - Wraps long subtitle text into short lines (≤20 chars) for readability.
     """
     blocks = re.split(r"\n\s*\n", text.strip())
     fixed_blocks: list[str] = []
-    # Allow ~10s slop so a final block that brushes against the duration still passes.
     cap = max_duration_ms + 10_000
     for block in blocks:
         lines = [l.rstrip() for l in block.splitlines() if l.strip()]
@@ -157,8 +209,7 @@ def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
         start_ms = _fix_carry_bug(h1, m1, s1, ms1, cap)
         end_ms = _fix_carry_bug(h2, m2, s2, ms2, cap)
         lines[1] = f"{ms_to_ts(start_ms)} --> {ms_to_ts(end_ms)}"
-        # Concatenate all text lines then re-wrap cleanly
+        # Merge consecutive text lines into one for parse_aligned_blocks compat
         combined = "".join(l.strip() for l in lines[2:])
-        wrapped_lines = _wrap_subtitle_line(combined, max_chars=20).split("\n")
-        fixed_blocks.append("\n".join(lines[:2] + wrapped_lines))
+        fixed_blocks.append("\n".join(lines[:2] + [combined]))
     return "\n\n".join(fixed_blocks) + "\n"
