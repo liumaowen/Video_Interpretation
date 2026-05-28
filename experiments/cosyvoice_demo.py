@@ -192,10 +192,10 @@ def synth_cosyvoice(
                 f"Pass --prompt-audio <wav> --prompt-text '<台词>', "
                 f"or make sure CosyVoice's bundled asset/zero_shot_prompt.wav exists."
             )
-        from cosyvoice.utils.file_utils import load_wav
-        prompt_speech = load_wav(str(prompt_audio), 16000)
+        # CosyVoice 2's frontend wants a file *path*; it loads internally at 24kHz.
+        # (Older docs / CosyVoice 1 showed pre-loaded tensor — that API changed.)
         print(f"Synthesizing zero-shot [prompt={prompt_audio.name}, {len(text)} chars]…")
-        gen = model.inference_zero_shot(text, prompt_text, prompt_speech, stream=False)
+        gen = model.inference_zero_shot(text, prompt_text, str(prompt_audio), stream=False)
 
     chunks = [piece["tts_speech"] for piece in gen]
     if not chunks:
