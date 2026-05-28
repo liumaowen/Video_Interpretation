@@ -36,8 +36,17 @@ def setup():
     print(f"  edge-tts: {edge_tts.__version__}")
     import moviepy
     print(f"  moviepy: {moviepy.__version__}")
-    import anthropic
-    print(f"  anthropic: {anthropic.__version__}")
+    import openai
+    print(f"  openai: {openai.__version__}")
+    import funasr
+    print(f"  funasr: {funasr.__version__}")
+    import modelscope
+    print(f"  modelscope: {modelscope.__version__}")
+    try:
+        import anthropic
+        print(f"  anthropic: {anthropic.__version__}")
+    except ImportError:
+        print("  anthropic: not installed (optional, only needed for provider='anthropic')")
 
     print("\n" + "=" * 60)
     print("Setup complete!")

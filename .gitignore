@@ -22,11 +22,6 @@ Thumbs.db
 .env
 .venv/
 
-# SSH keys (should never be committed)
-id_ed25519
-id_ed25519.pub
-id_rsa
-id_rsa.pub
 *.pem
 
 # Project artifacts (runtime generated, not tracked)

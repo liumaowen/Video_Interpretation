@@ -24,7 +24,7 @@ python main.py all <name>
 # 各个步骤（完整流程：transcribe → refine → tts → build）
 python main.py transcribe [name]   # ASR：默认 faster-whisper；可选 --engine funasr 走 SenseVoice + FSMN-VAD
 python main.py refine [name]       # 重新切分 SRT（仅 --engine exe 需要；其他引擎已直出合理粒度，all 会自动跳过）
-python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 GLM；支持 --srt 一步式、--vision 视觉理解）
+python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 ModelScope/Qwen3；支持 --srt 一步式、--vision 视觉理解）
 python main.py align [name]        # 为解说稿标注时间轴
 python main.py tts [name]          # 通过 edge-tts 合成配音
 python main.py build [name]        # 混音 + 烧入双字幕
@@ -95,7 +95,7 @@ vi/
 - 外部：`ffmpeg` 必须在 PATH 中
 
 ## 环境变量
-- LLM API key：环境变量名由 `config.toml` 的 `[llm].api_key_env` 控制（默认 `ZHIPU_API_KEY`；切到 `anthropic` provider 时一般设为 `ANTHROPIC_API_KEY`）。也可以直接在 `[llm].api_key` 里填值（不推荐进 git）
+- LLM API key：环境变量名由 `config.toml` 的 `[llm].api_key_env` 控制（默认 `MODELSCOPE_API_KEY`；切到 `anthropic` provider 时一般设为 `ANTHROPIC_API_KEY`）。也可以直接在 `[llm].api_key` 里填值（不推荐进 git）
 - `HF_ENDPOINT` — 可选，国内设置为 `https://hf-mirror.com` 可加速 HuggingFace 模型下载
 
 ## LLM provider 说明
@@ -128,5 +128,5 @@ python setup_modelscope.py
 
 - **字体**：Windows 默认字体（Arial、Microsoft YaHei）在 Linux 上不存在，代码会自动 fallback 到 DejaVu Sans / Noto Sans CJK SC
 - **ASR 选型**：CPU 上跑 whisper `tiny` 处理 2 分钟预告片约 1-5 分钟；切换 `--engine funasr` 用 SenseVoiceSmall 在 ModelScope Notebook 的 GPU 上更快，且自带 VAD/标点不再需要 refine。配置示例：`[asr] engine = "funasr"`、`device = "cuda:0"`
-- **网络**：edge-tts 和 Anthropic / 智谱 API 需要外网，ModelScope 默认支持
+- **网络**：edge-tts 和外部 LLM API（ModelScope / Anthropic）需要联网，ModelScope Notebook 默认放行
 - **上传素材**：通过 Notebook 界面上传预告片视频到 `projects/<name>/` 目录

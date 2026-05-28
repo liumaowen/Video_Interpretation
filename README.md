@@ -18,7 +18,7 @@
 - Python 3.11+
 - ffmpeg（在 PATH 中）
 - Windows（已验证 git-bash）/ macOS / Linux
-- 可选：LLM API key（仅使用 `llm-narrate` 时需要）。默认 provider 是 `openai_compatible`（智谱 GLM），认 `ZHIPU_API_KEY`；切到 `anthropic` 则认 `ANTHROPIC_API_KEY`。具体 env var 名由 `config.toml` 的 `llm.api_key_env` 控制。
+- 可选：LLM API key（仅使用 `llm-narrate` 时需要）。默认 provider 是 `openai_compatible`，base URL 指向 ModelScope 推理 API，认 `MODELSCOPE_API_KEY`；切到 `anthropic` 则认 `ANTHROPIC_API_KEY`。具体 env var 名由 `config.toml` 的 `llm.api_key_env` 控制。
 
 ### 安装
 
@@ -385,27 +385,6 @@ A: 调 `--length` 参数；也可以在 `--style` 里强调"语速要快/慢"。
 **Q: 1M context 这种参数我用不上吗**
 A: 本工具的 LLM 调用只读字幕（几 KB）+ 解说稿，不会触及大 context；走 `anthropic` provider 时 prompt caching 启用后多次重跑（如调风格）成本低。
 
-## 从老版本迁移
-
-如果你保留了根目录的旧脚本（`tts.py` / `make.py` / `transcribe.py` 等），它们已被这套 CLI 取代。映射关系：
-
-| 旧脚本 | 对应命令 |
-|---|---|
-| `transcribe.py` | `python main.py transcribe <name>` |
-| `refine_subtitle.py` | `python main.py refine <name>` |
-| `build_narration_srt.py` | `python main.py preview-srt <name>` |
-| `tts.py` | `python main.py tts <name>` |
-| `make.py` | `python main.py build <name>` |
-
-把旧数据迁过来：
-
-```bash
-python main.py init old_project --video "原视频路径"
-mv 旧的narration.txt projects/old_project/narration.txt
-mv 旧的narration_aligned.txt projects/old_project/narration_aligned.txt
-python main.py all old_project
-```
-
 ## 开发
 
 ### 添加新命令
@@ -416,4 +395,4 @@ python main.py all old_project
 
 ### 换 ASR 引擎
 
-实现一个新的 `vi/core/whisper_<engine>.py`，签名匹配 `whisper_py.py`，然后在 `commands/transcribe.py` 加分支即可。
+实现一个新的 `vi/core/whisper_<engine>.py`（或 `asr_<engine>.py`），签名匹配 `whisper_py.py`，然后在 `commands/transcribe.py` 加分支即可。FunASR / SenseVoice 的接入（`asr_funasr.py`）就是这样做的，可作参考。
