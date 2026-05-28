@@ -41,6 +41,16 @@ def run(args: argparse.Namespace) -> int:
             end_ms = (i + 1) * window if i < n - 1 else total_ms
             duration_sec = (end_ms - i * window) // 1000
             char_limits.append(max(10, int(duration_sec * 3.5)))
+
+        # Pre-flight check: is narration too long?
+        narration_text = narration.read_text(encoding="utf-8").strip()
+        narration_chars = sum(1 for c in narration_text if c.strip() and c not in "（）\n")
+        total_limit = sum(char_limits)
+        if narration_chars > total_limit:
+            print(f"\n  ⚠ 解说稿 {narration_chars} 字，但 {total_ms//1000} 秒最多容纳 {total_limit} 字（{narration_chars - total_limit} 字超出）")
+            print(f"  LLM 会尝试精简压缩，但效果可能不佳。建议重新生成更短的解说稿：\n")
+            print(f"  python main.py llm-narrate {pdir.name} --length {total_limit}\n")
+
         align_narration(
             narration_path=narration,
             subtitle_path=subtitle,

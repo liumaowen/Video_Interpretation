@@ -157,7 +157,8 @@ def sanitize_srt_text(text: str, max_duration_ms: int) -> str:
         start_ms = _fix_carry_bug(h1, m1, s1, ms1, cap)
         end_ms = _fix_carry_bug(h2, m2, s2, ms2, cap)
         lines[1] = f"{ms_to_ts(start_ms)} --> {ms_to_ts(end_ms)}"
-        # Wrap long text lines (skip the index line and timestamp line)
-        wrapped = [_wrap_subtitle_line(l, max_chars=20) for l in lines[2:]]
-        fixed_blocks.append("\n".join(lines[:2] + [w for line in wrapped for w in line.split("\n")]))
+        # Concatenate all text lines then re-wrap cleanly
+        combined = "".join(l.strip() for l in lines[2:])
+        wrapped_lines = _wrap_subtitle_line(combined, max_chars=20).split("\n")
+        fixed_blocks.append("\n".join(lines[:2] + wrapped_lines))
     return "\n\n".join(fixed_blocks) + "\n"
