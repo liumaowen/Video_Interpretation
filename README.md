@@ -18,7 +18,7 @@
 - Python 3.11+
 - ffmpeg（在 PATH 中）
 - Windows（已验证 git-bash）/ macOS / Linux
-- 可选：`ANTHROPIC_API_KEY` 环境变量（仅使用 `llm-narrate` 时需要）
+- 可选：LLM API key（仅使用 `llm-narrate` 时需要）。默认 provider 是 `openai_compatible`（智谱 GLM），认 `ZHIPU_API_KEY`；切到 `anthropic` 则认 `ANTHROPIC_API_KEY`。具体 env var 名由 `config.toml` 的 `llm.api_key_env` 控制。
 
 ### 安装
 
@@ -64,6 +64,7 @@ Video_Interpretation/
 │       ├── narration.txt        # 中文解说（人工写 / LLM 生成）
 │       ├── narration_aligned.txt# 带时间的解说（人工对时 / LLM 草稿）
 │       ├── narration_subtitle.srt # 中文字幕（tts 产出）
+│       ├── visual_description.txt # 关键帧画面描述（vision 模型产出，可选）
 │       ├── voice.wav            # 配音（tts 产出）
 │       └── output.mp4           # 成品
 └── shared/                      # 跨项目资产
@@ -111,17 +112,30 @@ python main.py refine [name] [-f]
 
 从 `source.json` 用更精细的算法重新切分 subtitle.srt，避免一行字幕过长。
 
-### llm-narrate — Claude 生成解说稿
+### llm-narrate — LLM 生成解说稿
 
 ```bash
-python main.py llm-narrate [name] [--style S] [--length N] [--align] [--model M]
+python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
+                           [--model M] [--provider anthropic|openai_compatible]
+                           [--base-url URL]
+                           [--vision] [--vision-model M] [--frame-interval SEC]
+                           [--force-vision] [-f]
 ```
 
 - `--style` 风格关键词，覆盖全局默认（例："恐怖片专题，强调氛围"）
-- `--length` 目标字数（默认 800）
-- `--align` 顺带生成 `narration_aligned.txt` 草稿（**必须人工 review 后才能跑 tts**）
+- `--length` 目标字数（默认 800，仅两步流程使用）
+- `--align` 跑完 `narration.txt` 后顺带产出 `narration_aligned.txt` 草稿
+- `--srt` 一步式：直接产出 `narration_aligned.txt`，跳过中间 `narration.txt`
+- `--provider` LLM provider，覆盖配置（`openai_compatible` 默认 / `anthropic`）
+- `--base-url` OpenAI 兼容接口的 base URL（如自建 Ollama / SiliconFlow / 智谱）
+- `--vision` 抽取关键帧 + 调多模态视觉模型描述画面，把描述拼进 prompt
+- `--vision-model` 视觉模型名（默认从配置读，回退 `glm-4v-flash`）
+- `--frame-interval` 抽帧间隔（秒，默认 3）
+- `--force-vision` 即使 `visual_description.txt` 已存在也重新分析
 
-需要环境变量 `ANTHROPIC_API_KEY`。
+**任何 `--align` / `--srt` LLM 草稿都必须人工 review 后才能跑 tts。**
+
+API key 来自 `[llm].api_key`（config.toml）或 `[llm].api_key_env` 指向的环境变量。
 
 ### align — 对齐时间轴
 
@@ -129,7 +143,7 @@ python main.py llm-narrate [name] [--style S] [--length N] [--align] [--model M]
 python main.py align [name] [--llm] [-f]
 ```
 
-不带 `--llm` 时生成空模板让你手填；带 `--llm` 时由 Claude 出草稿。
+不带 `--llm` 时生成空模板让你手填；带 `--llm` 时由配置的 LLM 出草稿。
 
 ### preview-srt — 不跑 TTS 预览字幕节奏
 
@@ -185,6 +199,7 @@ max_rate_boost = 40              # 配音超时时最高加速 40%
 
 [mix]
 voice_gain = 1.4
+ambient_gain = 0.15              # 原视频环境声
 bgm_gain = 0.15
 bgm_path = "shared/bgm/default.mp3"
 
@@ -194,8 +209,18 @@ size = 26
 primary = "&H00FFFF"             # ASS 颜色：黄色
 alignment = 2                    # 2=底部居中，8=顶部居中
 
+[fonts]
+# Linux 上 Windows 字体不存在时的 fallback，代码自动启用
+linux_subtitle_original = "DejaVu Sans"
+linux_subtitle_narration = "Noto Sans CJK SC Regular"
+
 [llm]
-model = "claude-opus-4-7"
+provider = "openai_compatible"   # 或 "anthropic"
+base_url = "https://open.bigmodel.cn/api/paas/v4"   # 智谱开放平台
+model = "glm-4.7-flash"
+api_key = ""                     # 直填（不推荐进 git）；或留空走 api_key_env
+api_key_env = "ZHIPU_API_KEY"    # provider=anthropic 时改 "ANTHROPIC_API_KEY"
+vision_model = "glm-4.6v-flash"  # --vision 时使用
 default_style = "B站电影解说，先抑后扬，三段式：背景→亮点→收尾"
 default_length = 800
 n_segments = 3                   # --align 时切几个时间块
@@ -261,7 +286,14 @@ bgm_path = "shared/bgm/horror.mp3"  # 用专门的恐怖片 BGM
 ### LLM 生成
 
 ```bash
+# 两步流程：先 narration.txt，再 --align 对时
 python main.py llm-narrate my_proj --style "悬疑恐怖向，强调氛围" --length 700 --align
+
+# 一步流程：直接产出 narration_aligned.txt（SRT 草稿）
+python main.py llm-narrate my_proj --srt --style "悬疑恐怖向"
+
+# 加视觉理解：先抽帧 + 调多模态模型描画面，再喂给文本模型
+python main.py llm-narrate my_proj --srt --vision --frame-interval 3
 ```
 
 - LLM 出的 `narration.txt` 通常可用，可能需要小幅微调语感
@@ -269,6 +301,7 @@ python main.py llm-narrate my_proj --style "悬疑恐怖向，强调氛围" --le
   - 时间分配是否匹配画面节奏
   - 是否有剧透、人名错误
   - 段落字数是否过长（会被 tts 自动加速到失真）
+- `--vision` 第一次会调用视觉模型抽帧、产出 `visual_description.txt` 缓存；后续重跑会复用缓存，除非加 `--force-vision`
 
 ## TTS 调优
 
@@ -334,7 +367,7 @@ A: 通常是 ffmpeg 版本太老。升级到 ffmpeg 6.0+。
 A: 调 `--length` 参数；也可以在 `--style` 里强调"语速要快/慢"。
 
 **Q: 1M context 这种参数我用不上吗**
-A: 本工具的 Claude 调用只读字幕（几 KB）+ 解说稿，不会触及大 context；prompt caching 启用后多次重跑（如调风格）成本低。
+A: 本工具的 LLM 调用只读字幕（几 KB）+ 解说稿，不会触及大 context；走 `anthropic` provider 时 prompt caching 启用后多次重跑（如调风格）成本低。
 
 ## 从老版本迁移
 

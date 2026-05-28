@@ -24,7 +24,7 @@ python main.py all <name>
 # 各个步骤（完整流程：transcribe → refine → tts → build）
 python main.py transcribe [name]   # ASR：通过 faster-whisper 识别英文字幕
 python main.py refine [name]       # 重新切分 SRT，避免一行过长
-python main.py llm-narrate [name]  # 通过 Claude API 生成中文解说稿
+python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 GLM；支持 --srt 一步式、--vision 视觉理解）
 python main.py align [name]        # 为解说稿标注时间轴
 python main.py tts [name]          # 通过 edge-tts 合成配音
 python main.py build [name]        # 混音 + 烧入双字幕
@@ -61,9 +61,10 @@ vi/
     ├── whisper_exe.py  # whisper-faster.exe 引擎
     ├── refine.py       # SRT 精炼算法
     ├── tts_engine.py   # edge-tts 封装，支持自动加速
-    ├── ffmpeg.py       # ffmpeg 字幕烧录
-    ├── llm.py          # Claude API 封装
-    ├── llm_prompts.py  # LLM 提示词模板
+    ├── ffmpeg.py       # ffmpeg 字幕烧录 + moviepy 混音
+    ├── llm.py          # 多 provider LLM 封装（anthropic / openai_compatible）
+    ├── llm_prompts.py  # LLM 提示词模板（含一步式 SRT 模板）
+    ├── vision.py       # ffmpeg 抽帧 + 多模态视觉模型描画面
     ├── srt.py          # SRT 解析/格式化工具
     └── preview_srt.py  # 按字符均分的 SRT 预览
 ```
@@ -87,12 +88,19 @@ vi/
 - `faster-whisper` — ASR 转录
 - `edge-tts` — 文本转语音（Microsoft Edge 在线 TTS）
 - `moviepy` — 音频混合
-- `anthropic` — Claude API，用于 LLM 解说稿生成
+- `anthropic` — Claude API（provider=anthropic 时使用）
+- `openai` — OpenAI 兼容接口（默认 provider；走智谱 GLM / Ollama / SiliconFlow 等）；同时被 `vision.py` 用于调多模态模型
 - 外部：`ffmpeg` 必须在 PATH 中
 
 ## 环境变量
-- `ANTHROPIC_API_KEY` — `llm-narrate` 命令必需
+- LLM API key：环境变量名由 `config.toml` 的 `[llm].api_key_env` 控制（默认 `ZHIPU_API_KEY`；切到 `anthropic` provider 时一般设为 `ANTHROPIC_API_KEY`）。也可以直接在 `[llm].api_key` 里填值（不推荐进 git）
 - `HF_ENDPOINT` — 可选，国内设置为 `https://hf-mirror.com` 可加速 HuggingFace 模型下载
+
+## LLM provider 说明
+- [vi/core/llm.py](vi/core/llm.py) 同时支持 `anthropic` 和 `openai_compatible` 两种 provider，由 `[llm].provider` 选择
+- `openai_compatible` 走任何兼容 OpenAI Chat Completions 接口的服务（Ollama / SiliconFlow / DeepSeek / 智谱 GLM 等），通过 `[llm].base_url` 切换
+- `llm-narrate` 命令同时支持两步流程（`narration.txt` + `align`）与一步流程（`--srt` 直接出 `narration_aligned.txt`）
+- `--vision` 开关：调 `vi/core/vision.py` 用 ffmpeg 抽关键帧 → 多模态模型描画面 → 缓存到 `projects/<name>/visual_description.txt` → 拼进解说 prompt
 
 ## ModelScope Notebook 部署
 
