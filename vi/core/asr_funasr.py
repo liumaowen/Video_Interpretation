@@ -25,12 +25,42 @@ from .srt import write_srt
 # Tolerate whitespace inside tags (ct-punc tokenizes "<|en|>" as "< | en | >").
 _TAG_RE = re.compile(r"<\s*\|[^|<>]*\|\s*>")
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?。！？])\s+")
+# Each SenseVoice chunk starts with a language tag. Split on lookahead so the
+# tag stays attached to the chunk it introduces.
+_LANG_TAG_LOOKAHEAD = re.compile(
+    r"(?=<\s*\|\s*(?:en|zh|zn|yue|ja|ko|auto|nospeech)\s*\|\s*>)",
+    re.IGNORECASE,
+)
 
 
 def _strip_tags(text: str) -> str:
     """Drop SenseVoice rich tokens like <|en|><|HAPPY|><|Speech|><|withitn|>."""
     cleaned = _TAG_RE.sub(" ", text)
     return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _split_chunks_by_lang_tag(text: str) -> list[str]:
+    """Split SenseVoice's concatenated text into per-VAD-chunk transcriptions."""
+    parts = _LANG_TAG_LOOKAHEAD.split(text)
+    out: list[str] = []
+    for p in parts:
+        clean = _strip_tags(p)
+        if clean:
+            out.append(clean)
+    return out
+
+
+def _vad_only_timestamps(
+    video_path: Path, vad_model: str, device: str
+) -> list[tuple[int, int]]:
+    """Run VAD alone to get speech-chunk [(start_ms, end_ms), ...] boundaries."""
+    from funasr import AutoModel
+    vm = AutoModel(model=vad_model, device=device, disable_update=True)
+    res = vm.generate(input=str(video_path))
+    if not res:
+        return []
+    value = res[0].get("value") or []
+    return [(int(s), int(e)) for s, e in value if int(e) > int(s)]
 
 
 def _split_long_segment(
@@ -179,8 +209,9 @@ def transcribe(
         language=lang,
         use_itn=True,
         batch_size_s=60,
-        merge_vad=True,
-        merge_length_s=15,
+        # Keep False so the number of <|en|> chunks in `text` matches a
+        # standalone VAD pass — the fallback below relies on that alignment.
+        merge_vad=False,
     )
 
     # Surface the raw shape so users can report it if parsing still misses.
@@ -189,6 +220,28 @@ def transcribe(
         print(f"FunASR returned {len(res)} item(s); keys per item: {keys}")
 
     entries = _entries_from_result(res)
+    if not entries:
+        # Fallback: funasr 1.3.1's chained pipeline returns merged text without
+        # timestamps. Run VAD alone to get chunk boundaries, then split the
+        # SenseVoice text on language-tag markers and pair the two.
+        text = res[0].get("text", "") if res else ""
+        parts = _split_chunks_by_lang_tag(text)
+        if parts:
+            print(f"Pairing {len(parts)} text segments with a separate VAD pass...")
+            chunks = _vad_only_timestamps(video_path, vad_model, device)
+            if chunks:
+                if len(parts) != len(chunks):
+                    print(
+                        f"Note: {len(parts)} text segments vs {len(chunks)} VAD "
+                        f"chunks — pairing the first {min(len(parts), len(chunks))}."
+                    )
+                n = min(len(parts), len(chunks))
+                entries = [
+                    (chunks[i][0], chunks[i][1], parts[i])
+                    for i in range(n)
+                    if parts[i]
+                ]
+
     if not entries:
         print("DEBUG raw res:", res)
         raise SystemExit(
