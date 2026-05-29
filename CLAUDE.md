@@ -3,6 +3,9 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 项目概述
+一直使用中文输出。
+本地负责开发代码，手动提交github。
+在服务器拉取代码运行和测试。
 
 Video_Interpretation（简称 vi）是一个 Python CLI 工具，用于将电影预告片自动合成为 B 站影评/解说视频。给定一个原版预告片 + 一段中文解说稿，它会输出一个带配音、背景音乐和双字幕（原英文 + 中文解说）的成品 mp4。
 
