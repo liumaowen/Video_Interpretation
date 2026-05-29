@@ -259,9 +259,10 @@ def generate_narration_srt(
 
     # Re-process: split each block into recording-friendly chunks (≤20 chars)
     # so the voice actor can read each line in one breath.
-    from ..core.srt import split_narration_for_recording, write_srt
+    from ..core.srt import split_narration_for_recording, allocate_chunk_times, write_srt
     _blocks = re.split(r"\n\s*\n", result.strip())
     final_entries = []
+    prev_end = None
     for block in _blocks:
         lines = [l.rstrip() for l in block.splitlines() if l.strip()]
         if len(lines) < 3:
@@ -278,21 +279,12 @@ def generate_narration_srt(
         text = "".join(l.strip() for l in lines[2:])
 
         chunks = split_narration_for_recording(text)
-        if len(chunks) == 1:
-            final_entries.append((start_ms, end_ms, chunks[0]))
+        if not chunks:
             continue
 
-        total_dur = end_ms - start_ms
-        chunk_dur = total_dur // len(chunks)
-        if chunk_dur < 800:
-            chunk_dur = 800
-        cur = start_ms
-        for chunk in chunks:
-            chunk_end = cur + chunk_dur
-            if chunk_end > end_ms:
-                chunk_end = end_ms
-            final_entries.append((cur, chunk_end, chunk))
-            cur = chunk_end
+        # Allocate time proportional to character count, no overlap with previous
+        entries, prev_end = allocate_chunk_times(chunks, start_ms, end_ms, prev_end)
+        final_entries.extend(entries)
 
     write_srt(out_path, final_entries)
     print(f"Wrote {out_path} ({len(final_entries)} entries)")
@@ -355,9 +347,10 @@ def align_narration(
 
     # Re-process: split each block's text into recording-friendly chunks (≤20 chars)
     # so the voice actor can read each line in one breath.
-    from ..core.srt import split_narration_for_recording, write_srt
+    from ..core.srt import split_narration_for_recording, allocate_chunk_times, write_srt
     _blocks = re.split(r"\n\s*\n", result.strip())
     final_entries = []
+    prev_end = None
     for block in _blocks:
         lines = [l.rstrip() for l in block.splitlines() if l.strip()]
         if len(lines) < 3:
@@ -375,22 +368,12 @@ def align_narration(
 
         # Split text into ≤20 char chunks at natural breakpoints
         chunks = split_narration_for_recording(text)
-        if len(chunks) == 1:
-            final_entries.append((start_ms, end_ms, chunks[0]))
+        if not chunks:
             continue
 
-        # Distribute chunks evenly across the time window, ≥800ms each
-        total_dur = end_ms - start_ms
-        chunk_dur = total_dur // len(chunks)
-        if chunk_dur < 800:
-            chunk_dur = 800
-        cur = start_ms
-        for chunk in chunks:
-            chunk_end = cur + chunk_dur
-            if chunk_end > end_ms:
-                chunk_end = end_ms
-            final_entries.append((cur, chunk_end, chunk))
-            cur = chunk_end
+        # Allocate time proportional to character count, no overlap with previous
+        entries, prev_end = allocate_chunk_times(chunks, start_ms, end_ms, prev_end)
+        final_entries.extend(entries)
 
     total_ms = windows[-1][1] if windows else 0
     write_srt(out_path, final_entries)

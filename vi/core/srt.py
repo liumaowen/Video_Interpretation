@@ -234,6 +234,67 @@ def format_narration_for_recording(text: str) -> str:
     return "\n\n".join(c.strip() for c in chunks if c.strip())
 
 
+# Speaking rate: comfortable emotional delivery pace (chars per second)
+SPEAKING_RATE_CHARS_PER_SEC = 3.5
+
+
+def allocate_chunk_times(chunks: list[str], start_ms: int, end_ms: int,
+                         prev_end_ms: int | None = None) -> tuple[list[tuple[int, int, str]], int]:
+    """Allocate time to text chunks proportional to character count.
+
+    Each chunk gets time based on its length at SPEAKING_RATE_CHARS_PER_SEC
+    (3.5 chars/sec), with a minimum of 800ms. Chunks are sequenced
+    sequentially starting from max(start_ms, prev_end_ms) to avoid overlap
+    with previous blocks.
+
+    Args:
+        chunks: List of text chunks.
+        start_ms: Original start time of this block.
+        end_ms: Original end time of this block (used for scaling if total fits).
+        prev_end_ms: End time of the last entry from the previous block, or None
+            if this is the first block.
+
+    Returns:
+        (entries, actual_end_ms) where entries is list of (start_ms, end_ms, text)
+        and actual_end_ms is the end time of the last entry.
+    """
+    if not chunks:
+        return [], prev_end_ms or start_ms
+
+    # Start from max of original start and previous block's end (no overlap)
+    cur = max(start_ms, prev_end_ms) if prev_end_ms is not None else start_ms
+
+    # Calculate ideal duration for each chunk based on char count
+    ideal_durs = []
+    for chunk in chunks:
+        char_count = len(chunk.strip())
+        if char_count == 0:
+            ideal_durs.append(NARRATION_MIN_DURATION_MS)
+            continue
+        ideal = int(char_count / SPEAKING_RATE_CHARS_PER_SEC * 1000)
+        ideal_durs.append(max(ideal, NARRATION_MIN_DURATION_MS))
+
+    total_ideal = sum(ideal_durs)
+    total_window = end_ms - cur
+
+    # If total ideal fits within remaining window, scale up to fill it
+    # (more natural pacing with longer pauses between lines)
+    if total_ideal <= total_window:
+        scale = total_window / total_ideal
+        final_durs = [int(d * scale) for d in ideal_durs]
+    else:
+        # Text is too long for the window — keep ideal durations
+        final_durs = ideal_durs
+
+    entries = []
+    for chunk, dur in zip(chunks, final_durs):
+        chunk_end = cur + dur
+        entries.append((cur, chunk_end, chunk))
+        cur = chunk_end
+
+    return entries, cur
+
+
 def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:
     """LLMs sometimes write `01:00:01` when they mean `00:01:01` (carry into hour
     instead of minute). Detect that by checking if the value exceeds the video
