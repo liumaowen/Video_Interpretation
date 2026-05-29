@@ -204,14 +204,19 @@ def generate_narration(
     client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
     subtitle_text, duration_sec = _srt_to_prompt_text(subtitle_path)
 
+    # Calculate max chars: video duration × comfortable speaking rate (3.5 chars/sec)
+    from ..core.srt import SPEAKING_RATE_CHARS_PER_SEC
+    max_chars = int(duration_sec * SPEAKING_RATE_CHARS_PER_SEC)
+
     visual_section = _format_visual_section(visual_description)
     user_text = llm_prompts.NARRATE_USER_TEMPLATE.format(
         video_title=video_title or "未知",
         visual_section=visual_section,
         subtitle_text=subtitle_text,
         duration_sec=duration_sec,
+        max_chars=max_chars,
         style=style,
-        length=length,
+        length=min(length, max_chars),  # Don't ask for more than the video can hold
     )
 
     print(f"Calling {model} (style={style!r}, length={length})...", file=sys.stderr)
@@ -243,12 +248,17 @@ def generate_narration_srt(
     client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
     subtitle_text, duration_sec = _srt_to_prompt_text(subtitle_path)
 
+    # Calculate max chars: video duration × comfortable speaking rate (3.5 chars/sec)
+    from ..core.srt import SPEAKING_RATE_CHARS_PER_SEC
+    max_chars = int(duration_sec * SPEAKING_RATE_CHARS_PER_SEC)
+
     visual_section = _format_visual_section(visual_description)
     user_text = llm_prompts.NARRATE_SRT_USER_TEMPLATE.format(
         video_title=video_title or "未知",
         visual_section=visual_section,
         subtitle_text=subtitle_text,
         duration_sec=duration_sec,
+        max_chars=max_chars,
         style=style,
     )
 
