@@ -156,17 +156,26 @@ def split_narration_text(text: str) -> list[str]:
     for sent in sentences:
         parts.extend(_split_long_sentence(sent))
 
-    # Step 3: merge very short chunks with next one (mirrors MIN_DURATION_MS merge)
+    # Step 3: merge short chunks with previous one (mirrors MIN_DURATION_MS merge)
     merged = []
     for chunk in parts:
         if merged and len(chunk.strip()) <= 5:
             merged[-1] = merged[-1].rstrip() + chunk
-        elif merged and len(merged[-1]) + len(chunk.strip()) <= NARRATION_MAX_CHARS and len(chunk.strip()) <= 8:
+        elif merged and len(merged[-1]) + len(chunk.strip()) <= NARRATION_MAX_CHARS and len(chunk.strip()) <= 20:
             merged[-1] = merged[-1].rstrip() + chunk
         else:
             merged.append(chunk)
 
-    return merged
+    # Step 4: re-split any merged result that still exceeds the limit
+    # (this catches cases like long sentences with only one soft punctuation)
+    result = []
+    for item in merged:
+        if len(item) > NARRATION_MAX_CHARS:
+            result.extend(_split_long_sentence(item))
+        else:
+            result.append(item)
+
+    return result
 
 
 def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:
