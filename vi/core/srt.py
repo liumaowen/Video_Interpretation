@@ -93,42 +93,25 @@ NARRATION_SOFT_PUNCT = set("，；、")
 RECORDING_LINE_MAX_CHARS = 20
 
 
-def format_narration_for_recording(text: str) -> str:
-    """Split narration into short lines suitable for voice recording.
+def _split_narration_sentences(text: str) -> list[str]:
+    """Split narration at sentence terminators (。！？)."""
+    sentences = []
+    cur = ""
+    for ch in text:
+        cur += ch
+        if ch in NARRATION_END_PUNCT:
+            sentences.append(cur)
+            cur = ""
+    if cur.strip():
+        sentences.append(cur)
+    return [s for s in sentences if s]
 
-    Each line is one natural pause (≤{RECORDING_LINE_MAX_CHARS} chars), split
-    at commas/periods/soft punctuation. Returns a single string with double
-    newlines between lines.
+
+def _split_long_sentence_at(sent: str, max_chars: int) -> list[str]:
+    """Split a long sentence into ≤max_chars chunks at soft punctuation.
+
+    Falls back to mid-point splitting if no soft punctuation exists.
     """
-    # Reuse the same sentence splitting logic
-    sentences = _split_narration_sentences(text)
-    parts = []
-    for sent in sentences:
-        parts.extend(_split_long_sentence_with_limit(sent, RECORDING_LINE_MAX_CHARS))
-
-    # Merge very short tails
-    merged = []
-    for chunk in parts:
-        if merged and len(chunk.strip()) <= 5:
-            merged[-1] = merged[-1].rstrip() + chunk
-        elif merged and len(merged[-1]) + len(chunk.strip()) <= RECORDING_LINE_MAX_CHARS and len(chunk.strip()) <= 8:
-            merged[-1] = merged[-1].rstrip() + chunk
-        else:
-            merged.append(chunk)
-
-    # Re-split any that still exceed the limit
-    result = []
-    for item in merged:
-        if len(item) > RECORDING_LINE_MAX_CHARS:
-            result.extend(_split_long_sentence_with_limit(item, RECORDING_LINE_MAX_CHARS))
-        else:
-            result.append(item)
-
-    return "\n\n".join(r.strip() for r in result if r.strip())
-
-
-def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
-    """Split a long sentence into chunks at soft punctuation, respecting max_chars."""
     if len(sent) <= max_chars:
         return [sent]
 
@@ -139,7 +122,7 @@ def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
             split_indices.append(i)
 
     if not split_indices:
-        # No soft punctuation — split evenly
+        # No soft punctuation — split evenly at mid-point
         parts = []
         remaining = sent
         while len(remaining) > max_chars:
@@ -150,6 +133,7 @@ def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
             parts.append(remaining)
         return parts
 
+    # Build chunks from split points
     segments = []
     buf = []
     buf_len = 0
@@ -163,6 +147,7 @@ def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
 
     if buf:
         if segments and buf_len < 10:
+            # Short tail — merge into previous
             segments[-1] += "".join(buf)
         else:
             segments.append("".join(buf))
@@ -170,72 +155,16 @@ def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
     return segments if segments else [sent[:max_chars]]
 
 
-def _split_narration_sentences(text: str) -> list[str]:
-    """Split narration at sentence terminators (。！？), mirroring whisper_py Step 1."""
-    sentences = []
-    cur = ""
-    for ch in text:
-        cur += ch
-        if ch in NARRATION_END_PUNCT:
-            sentences.append(cur)
-            cur = ""
-    if cur.strip():
-        sentences.append(cur)
-    return [s for s in sentences if s]
+def _split_and_merge(text: str, max_chars: int, short_merge_threshold: int = 5, short_merge_limit: int = 20) -> list[str]:
+    """Core algorithm: split text at sentence/soft-punctuation boundaries, merge short tails.
 
+    Args:
+        text: Input narration text.
+        max_chars: Maximum characters per chunk.
+        short_merge_threshold: Chunks ≤ this many chars get merged into previous.
+        short_merge_limit: Only merge if combined length ≤ this.
 
-def _split_long_sentence(sent: str) -> list[str]:
-    """Split a single long sentence into <=60-char chunks at soft punctuation.
-    Falls back to mid-point splitting if no soft punctuation exists.
-    """
-    if len(sent) <= NARRATION_MAX_CHARS:
-        return [sent]
-
-    chars = list(sent)
-    split_indices = []
-    for i, ch in enumerate(chars[:-1]):
-        if ch in NARRATION_SOFT_PUNCT:
-            split_indices.append(i)
-
-    if not split_indices:
-        # No soft punctuation at all — split evenly at mid-point
-        parts = []
-        remaining = sent
-        while len(remaining) > NARRATION_MAX_CHARS:
-            mid = len(remaining) // 2
-            parts.append(remaining[:mid])
-            remaining = remaining[mid:]
-        if remaining:
-            parts.append(remaining)
-        return parts
-
-    # Build chunks from split points
-    segments = []
-    buf_start = 0
-    buf = []
-    buf_len = 0
-    for i, ch in enumerate(chars):
-        buf.append(ch)
-        buf_len += 1
-        if i in split_indices and buf_len >= NARRATION_MAX_CHARS // 2:
-            segments.append("".join(buf))
-            buf = []
-            buf_len = 0
-
-    if buf:
-        if segments and buf_len < 10:
-            # Short tail — merge into previous
-            segments[-1] += "".join(buf)
-        else:
-            segments.append("".join(buf))
-
-    return segments if segments else [sent[:NARRATION_MAX_CHARS]]
-
-
-def split_narration_text(text: str) -> list[str]:
-    """Sentence-aware splitting of narration text, same logic as whisper_py.group_words.
-
-    Returns a list of text chunks, each ≤60 chars, split at natural breakpoints.
+    Returns list of text chunks, each ≤ max_chars (after re-split pass).
     """
     # Step 1: split into sentences at end punctuation
     sentences = _split_narration_sentences(text)
@@ -243,28 +172,55 @@ def split_narration_text(text: str) -> list[str]:
     # Step 2: split long sentences at soft punctuation
     parts = []
     for sent in sentences:
-        parts.extend(_split_long_sentence(sent))
+        parts.extend(_split_long_sentence_at(sent, max_chars))
 
-    # Step 3: merge short chunks with previous one (mirrors MIN_DURATION_MS merge)
+    # Step 3: merge short chunks with previous
     merged = []
     for chunk in parts:
-        if merged and len(chunk.strip()) <= 5:
+        if merged and len(chunk.strip()) <= short_merge_threshold:
             merged[-1] = merged[-1].rstrip() + chunk
-        elif merged and len(merged[-1]) + len(chunk.strip()) <= NARRATION_MAX_CHARS and len(chunk.strip()) <= 20:
+        elif merged and len(merged[-1]) + len(chunk.strip()) <= max_chars and len(chunk.strip()) <= short_merge_limit:
             merged[-1] = merged[-1].rstrip() + chunk
         else:
             merged.append(chunk)
 
     # Step 4: re-split any merged result that still exceeds the limit
-    # (this catches cases like long sentences with only one soft punctuation)
     result = []
     for item in merged:
-        if len(item) > NARRATION_MAX_CHARS:
-            result.extend(_split_long_sentence(item))
+        if len(item) > max_chars:
+            result.extend(_split_long_sentence_at(item, max_chars))
         else:
             result.append(item)
 
     return result
+
+
+def split_narration_text(text: str) -> list[str]:
+    """Sentence-aware splitting of narration text, same logic as whisper_py.group_words.
+
+    Returns a list of text chunks, each ≤60 chars, split at natural breakpoints.
+    """
+    return _split_and_merge(text, NARRATION_MAX_CHARS)
+
+
+def split_narration_for_recording(text: str) -> list[str]:
+    """Split narration into short lines suitable for voice recording.
+
+    Each line is one natural pause (≤20 chars), split at commas/periods.
+    Returns a list of text chunks.
+    """
+    return _split_and_merge(
+        text,
+        RECORDING_LINE_MAX_CHARS,
+        short_merge_threshold=5,
+        short_merge_limit=8,
+    )
+
+
+def format_narration_for_recording(text: str) -> str:
+    """Like split_narration_for_recording but returns a string with double-newlines between lines."""
+    chunks = split_narration_for_recording(text)
+    return "\n\n".join(c.strip() for c in chunks if c.strip())
 
 
 def _fix_carry_bug(h: int, m: int, s: int, ms: int, max_ms: int) -> int:

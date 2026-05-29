@@ -257,9 +257,9 @@ def generate_narration_srt(
         call_fn, client, model, llm_prompts.NARRATE_SRT_SYSTEM, user_text
     )
 
-    # Re-process: split each block into subtitle-sized chunks (≤60 chars)
-    # mirroring whisper_py.group_words so the output is actually readable.
-    from ..core.srt import split_narration_text, write_srt
+    # Re-process: split each block into recording-friendly chunks (≤20 chars)
+    # so the voice actor can read each line in one breath.
+    from ..core.srt import split_narration_for_recording, write_srt
     _blocks = re.split(r"\n\s*\n", result.strip())
     final_entries = []
     for block in _blocks:
@@ -277,7 +277,7 @@ def generate_narration_srt(
         end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
         text = "".join(l.strip() for l in lines[2:])
 
-        chunks = split_narration_text(text)
+        chunks = split_narration_for_recording(text)
         if len(chunks) == 1:
             final_entries.append((start_ms, end_ms, chunks[0]))
             continue
@@ -353,9 +353,9 @@ def align_narration(
         call_fn, client, model, llm_prompts.ALIGN_SYSTEM, user_text
     )
 
-    # Re-process: split each block's text into subtitle-sized chunks using
-    # the same sentence-aware algorithm as the English ASR subtitles.
-    from ..core.srt import split_narration_text, write_srt
+    # Re-process: split each block's text into recording-friendly chunks (≤20 chars)
+    # so the voice actor can read each line in one breath.
+    from ..core.srt import split_narration_for_recording, write_srt
     _blocks = re.split(r"\n\s*\n", result.strip())
     final_entries = []
     for block in _blocks:
@@ -373,8 +373,8 @@ def align_narration(
         end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
         text = "".join(l.strip() for l in lines[2:])
 
-        # Split text into ≤60 char chunks at natural breakpoints (mirrors whisper_py)
-        chunks = split_narration_text(text)
+        # Split text into ≤20 char chunks at natural breakpoints
+        chunks = split_narration_for_recording(text)
         if len(chunks) == 1:
             final_entries.append((start_ms, end_ms, chunks[0]))
             continue
