@@ -105,40 +105,49 @@ def _split_narration_sentences(text: str) -> list[str]:
 
 
 def _split_long_sentence(sent: str) -> list[str]:
-    """Split a single long sentence at soft punctuation, mirroring whisper_py Step 2."""
+    """Split a single long sentence into <=60-char chunks at soft punctuation.
+    Falls back to mid-point splitting if no soft punctuation exists.
+    """
     if len(sent) <= NARRATION_MAX_CHARS:
         return [sent]
 
-    split_indices = []
     chars = list(sent)
+    split_indices = []
     for i, ch in enumerate(chars[:-1]):
         if ch in NARRATION_SOFT_PUNCT:
             split_indices.append(i)
 
     if not split_indices:
-        mid = len(chars) // 2
-        split_indices = [mid]
+        # No soft punctuation at all — split evenly at mid-point
+        parts = []
+        remaining = sent
+        while len(remaining) > NARRATION_MAX_CHARS:
+            mid = len(remaining) // 2
+            parts.append(remaining[:mid])
+            remaining = remaining[mid:]
+        if remaining:
+            parts.append(remaining)
+        return parts
 
-    # Build sub-groups from split points nearest to the middle first
+    # Build chunks from split points
     segments = []
-    start = 0
-    for idx in sorted(split_indices):
-        chunk = sent[start:idx + 1]
-        if len(chunk) <= NARRATION_MAX_CHARS and len(chunk) > 0:
-            segments.append(chunk)
-            start = idx + 1
+    buf_start = 0
+    buf = []
+    buf_len = 0
+    for i, ch in enumerate(chars):
+        buf.append(ch)
+        buf_len += 1
+        if i in split_indices and buf_len >= NARRATION_MAX_CHARS // 2:
+            segments.append("".join(buf))
+            buf = []
+            buf_len = 0
 
-    if start < len(sent):
-        tail = sent[start:]
-        if segments and len(tail) <= NARRATION_MAX_CHARS:
-            segments.append(tail)
-        elif len(tail) > NARRATION_MAX_CHARS:
-            # Force-split tail
-            while len(tail) > NARRATION_MAX_CHARS:
-                segments.append(tail[:NARRATION_MAX_CHARS])
-                tail = tail[NARRATION_MAX_CHARS:]
-            if tail:
-                segments.append(tail)
+    if buf:
+        if segments and buf_len < 10:
+            # Short tail — merge into previous
+            segments[-1] += "".join(buf)
+        else:
+            segments.append("".join(buf))
 
     return segments if segments else [sent[:NARRATION_MAX_CHARS]]
 
