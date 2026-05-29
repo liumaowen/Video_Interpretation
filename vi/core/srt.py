@@ -237,26 +237,56 @@ def format_narration_for_recording(text: str) -> str:
 # Speaking rate: comfortable emotional delivery pace (chars per second)
 SPEAKING_RATE_CHARS_PER_SEC = 3.5
 
+# Keywords that indicate a visual description should be skipped for narration
+VISUAL_SKIP_KEYWORDS = {"片头Logo", "黑屏", "Logo", "导演信息", "显示导演", "显示文字"}
+
+
+def parse_visual_description(path: str | Path) -> list[tuple[int, str, bool]]:
+    """Parse visual_description.txt into (timestamp_ms, description, should_skip) tuples.
+
+    Returns entries sorted by timestamp. Entries with Logo/black-screen keywords
+    are marked with should_skip=True for the caller to handle.
+    """
+    content = Path(path).read_text(encoding="utf-8")
+    entries = []
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r'\[(\d+:\d+:\d+)[,.](\d+)\]\s*(.+)', line)
+        if not m:
+            continue
+        ts = m.group(1)
+        ms_str = m.group(2).ljust(3, '0')[:3]
+        ms = ts_to_ms(f'{ts},{ms_str}')
+        desc = m.group(3).strip()
+        should_skip = any(kw in desc for kw in VISUAL_SKIP_KEYWORDS)
+        entries.append((ms, desc, should_skip))
+    entries.sort(key=lambda x: x[0])
+    return entries
+
 
 def allocate_chunk_times(chunks: list[str], start_ms: int, end_ms: int,
-                         prev_end_ms: int | None = None) -> tuple[list[tuple[int, int, str]], int]:
+                         prev_end_ms: int | None = None,
+                         max_end_ms: int | None = None) -> tuple[list[tuple[int, int, str]], int]:
     """Allocate time to text chunks proportional to character count.
 
     Each chunk gets time based on its length at SPEAKING_RATE_CHARS_PER_SEC
     (3.5 chars/sec), with a minimum of 800ms. Chunks are sequenced
-    sequentially starting from max(start_ms, prev_end_ms) to avoid overlap
-    with previous blocks.
+    sequentially starting from max(start_ms, prev_end_ms) to avoid overlap.
+
+    If max_end_ms is set and total allocation would exceed it, durations are
+    compressed so the last entry ends at or before max_end_ms.
 
     Args:
         chunks: List of text chunks.
         start_ms: Original start time of this block.
         end_ms: Original end time of this block (used for scaling if total fits).
-        prev_end_ms: End time of the last entry from the previous block, or None
-            if this is the first block.
+        prev_end_ms: End time of the last entry from the previous block.
+        max_end_ms: Hard deadline — final entry must end at or before this.
 
     Returns:
-        (entries, actual_end_ms) where entries is list of (start_ms, end_ms, text)
-        and actual_end_ms is the end time of the last entry.
+        (entries, actual_end_ms) where entries is list of (start_ms, end_ms, text).
     """
     if not chunks:
         return [], prev_end_ms or start_ms
@@ -277,14 +307,23 @@ def allocate_chunk_times(chunks: list[str], start_ms: int, end_ms: int,
     total_ideal = sum(ideal_durs)
     total_window = end_ms - cur
 
-    # If total ideal fits within remaining window, scale up to fill it
-    # (more natural pacing with longer pauses between lines)
+    # If total ideal fits within window, scale up to fill it
     if total_ideal <= total_window:
         scale = total_window / total_ideal
         final_durs = [int(d * scale) for d in ideal_durs]
     else:
-        # Text is too long for the window — keep ideal durations
+        # Text is too long — keep ideal durations
         final_durs = ideal_durs
+
+    # Enforce max_end_ms: compress if we'd exceed it
+    if max_end_ms is not None:
+        projected_end = cur + sum(final_durs)
+        if projected_end > max_end_ms:
+            # Compress proportionally to fit within max_end_ms
+            available = max_end_ms - cur
+            if available > 0:
+                scale = available / total_ideal if total_ideal > 0 else 1.0
+                final_durs = [max(int(d * scale), NARRATION_MIN_DURATION_MS) for d in ideal_durs]
 
     entries = []
     for chunk, dur in zip(chunks, final_durs):

@@ -17,6 +17,9 @@ def configure(p: argparse.ArgumentParser):
                    help="Also generate narration_aligned.txt draft (requires human review)")
     p.add_argument("--srt", action="store_true",
                    help="One-step mode: directly generate narration_aligned.txt (SRT)")
+    p.add_argument("--visual", action="store_true",
+                   help="Visual-anchored mode: generate narration per visual event "
+                        "(requires visual_description.txt)")
     p.add_argument("--vision", action="store_true",
                    help="Analyze video frames with a vision model and include in prompt")
     p.add_argument("--vision-model", help="Vision model name (default from config or glm-4v-flash)")
@@ -25,6 +28,15 @@ def configure(p: argparse.ArgumentParser):
     p.add_argument("-f", "--force", action="store_true", help="Overwrite existing narration files")
     p.add_argument("--force-vision", action="store_true",
                    help="Force re-analyze video frames even if visual_description.txt exists")
+
+
+def _get_video_duration_ms(subtitle_path) -> int:
+    """Estimate video duration from subtitle.srt end time."""
+    from ..core.srt import parse_srt
+    entries = parse_srt(subtitle_path)
+    if entries:
+        return entries[-1][2]
+    return 0
 
 
 def _get_visual_description(pdir, cfg, video_title, base_url, api_key, args):
@@ -54,6 +66,17 @@ def _get_visual_description(pdir, cfg, video_title, base_url, api_key, args):
     )
 
 
+def _load_visual_description_file(pdir) -> str:
+    """Load visual_description.txt if it exists."""
+    vd_path = pdir / "visual_description.txt"
+    if vd_path.exists():
+        content = vd_path.read_text(encoding="utf-8").strip()
+        if content:
+            print(f"Loaded visual description from {vd_path}", file=__import__("sys").stderr)
+            return content
+    return ""
+
+
 def run(args: argparse.Namespace) -> int:
     import sys
 
@@ -74,10 +97,14 @@ def run(args: argparse.Namespace) -> int:
     length = args.length or config.get(cfg, "llm.default_length", 800)
     video_title = config.get(cfg, "project.title", "") or config.get(cfg, "project.name", "")
 
-    # Vision analysis (optional)
+    # Load visual description: from cache file or vision analysis
     visual_description = ""
+    visual_description_path = pdir / "visual_description.txt"
+    if visual_description_path.exists():
+        visual_description = _load_visual_description_file(pdir)
+
+    # Vision analysis (only if --vision flag)
     if args.vision:
-        # Resolve API key for vision (same as LLM by default)
         resolved_key = api_key or __import__("os").environ.get(api_key_env, "")
         if resolved_key:
             visual_description = _get_visual_description(
@@ -85,6 +112,35 @@ def run(args: argparse.Namespace) -> int:
             )
         else:
             print("API key not available for vision analysis. Skipping.", file=sys.stderr)
+
+    video_duration_ms = _get_video_duration_ms(subtitle)
+    if video_duration_ms:
+        print(f"Estimated video duration: {video_duration_ms / 1000:.1f}s", file=sys.stderr)
+
+    # Visual-anchored mode: generate narration per visual event
+    if args.visual:
+        if not visual_description_path.exists():
+            print("visual_description.txt not found. Run `llm-narrate --vision` first.", file=sys.stderr)
+            return 2
+        out = pdir / "narration_aligned.txt"
+        if out.exists() and not args.force:
+            print(f"{out} already exists (use --force to overwrite)")
+            return 0
+        from ..core.llm import generate_narration_visual
+        generate_narration_visual(
+            subtitle_path=subtitle,
+            visual_description_path=visual_description_path,
+            out_path=out,
+            video_duration_ms=video_duration_ms,
+            style=style,
+            video_title=video_title,
+            model=model,
+            api_key=api_key,
+            api_key_env=api_key_env,
+            provider=provider,
+            base_url=base_url,
+        )
+        return 0
 
     # One-step SRT mode
     if args.srt:
@@ -134,6 +190,8 @@ def run(args: argparse.Namespace) -> int:
             subtitle_path=subtitle,
             out_path=align_out,
             n_segments=config.get(cfg, "llm.n_segments", 3),
+            video_duration_ms=video_duration_ms,
+            visual_description_path=visual_description_path,
             model=model,
             api_key=api_key,
             api_key_env=api_key_env,

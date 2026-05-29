@@ -301,6 +301,119 @@ def generate_narration_srt(
     print("  ⚠ LLM 生成为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
 
 
+def generate_narration_visual(
+    subtitle_path: Path,
+    visual_description_path: Path,
+    out_path: Path,
+    video_duration_ms: int,
+    style: str = "",
+    video_title: str = "",
+    model: str = "qwen2.5:7b",
+    api_key: str = "",
+    api_key_env: str = "OPENAI_API_KEY",
+    provider: str = "openai_compatible",
+    base_url: str = "",
+) -> None:
+    """Generate narration SRT anchored to visual event timestamps.
+
+    Parses visual_description.txt, creates a prompt listing each visual
+    event with its timestamp, and instructs the LLM to write one short
+    narration line per visual event. Post-processing splits each line into
+    ≤20 char chunks and allocates time proportionally, anchored to the
+    visual event timestamp.
+
+    Total narration duration is constrained to fit within video_duration_ms.
+    """
+    from ..core.srt import (
+        parse_visual_description, split_narration_for_recording,
+        allocate_chunk_times, SPEAKING_RATE_CHARS_PER_SEC, write_srt,
+    )
+
+    # Parse visual description
+    visual_events = parse_visual_description(visual_description_path)
+    if not visual_events:
+        raise SystemExit(f"No visual events parsed from {visual_description_path}")
+
+    # Filter out skip events (Logo, black screen) for narration
+    active_events = [(ms, desc, False) for ms, desc, skip in visual_events if not skip]
+    if not active_events:
+        raise SystemExit("No active visual events after filtering.")
+
+    # Calculate max chars
+    duration_sec = video_duration_ms // 1000
+    max_chars = int(duration_sec * SPEAKING_RATE_CHARS_PER_SEC)
+
+    # Build visual events text for prompt
+    visual_events_lines = []
+    for i, (ms, desc, _) in enumerate(active_events):
+        ts = ms_to_ts(ms)
+        # Calculate available window until next event
+        if i < len(active_events) - 1:
+            next_ms = active_events[i + 1][0]
+            window_ms = next_ms - ms
+        else:
+            window_ms = video_duration_ms - ms
+        window_sec = window_ms // 1000
+        window_chars = int(window_sec * SPEAKING_RATE_CHARS_PER_SEC)
+        visual_events_lines.append(f"  [{ts}] {desc}  （窗口 {window_sec} 秒，最多 {window_chars} 字）")
+
+    # Build optional subtitle section
+    subtitle_section = ""
+    if subtitle_path.exists():
+        subtitle_text, _ = _srt_to_prompt_text(subtitle_path)
+        subtitle_section = f"【原视频英文字幕】（带时间戳，仅供参考剧情）：\n\n{subtitle_text}\n\n"
+
+    client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
+
+    user_text = llm_prompts.VISUAL_ANCHOR_USER_TEMPLATE.format(
+        video_title=video_title or "未知",
+        duration_sec=duration_sec,
+        max_chars=max_chars,
+        subtitle_section=subtitle_section,
+        visual_events="\n".join(visual_events_lines),
+    )
+
+    print(f"Calling {model} for visual-anchored narration (style={style!r}, {len(active_events)} events)...",
+          file=sys.stderr)
+    result = _stream_and_collect(
+        call_fn, client, model, llm_prompts.VISUAL_ANCHOR_SYSTEM, user_text
+    )
+
+    # Post-process: parse LLM output, split into chunks, allocate time
+    _blocks = re.split(r"\n\s*\n", result.strip())
+    final_entries = []
+    prev_end = None
+
+    for block in _blocks:
+        lines = [l.rstrip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 3:
+            continue
+        m = re.match(
+            r"\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*",
+            lines[1],
+        )
+        if not m:
+            continue
+        h1, mi1, s1, ms1, h2, mi2, s2, ms2 = map(int, m.groups())
+        start_ms = (h1 * 3600 + mi1 * 60 + s1) * 1000 + ms1
+        end_ms = (h2 * 3600 + mi2 * 60 + s2) * 1000 + ms2
+        text = "".join(l.strip() for l in lines[2:])
+
+        chunks = split_narration_for_recording(text)
+        if not chunks:
+            continue
+
+        entries, prev_end = allocate_chunk_times(
+            chunks, start_ms, end_ms, prev_end, max_end_ms=video_duration_ms,
+        )
+        final_entries.extend(entries)
+
+    write_srt(out_path, final_entries)
+    total_chars = sum(len(t) for _, _, t in final_entries)
+    print(f"Wrote {out_path} ({len(final_entries)} entries, {total_chars} chars)")
+    print("  ⚠ LLM 生成为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
+
+
 def _segment_subtitle_windows(subtitle_path: Path, n: int) -> list[tuple[int, int]]:
     """Split the subtitle timeline into n approximately equal windows."""
     entries = parse_srt(subtitle_path)
@@ -316,41 +429,97 @@ def _segment_subtitle_windows(subtitle_path: Path, n: int) -> list[tuple[int, in
     return windows
 
 
+def _visual_description_windows(
+    visual_description_path: Path,
+    video_duration_ms: int,
+) -> list[tuple[int, int, str]]:
+    """Create time windows from visual description events.
+
+    Returns list of (start_ms, end_ms, description) where each window spans
+    from one visual event to the next. Skip events (Logo/black-screen) are
+    filtered out but their time gaps are preserved.
+    """
+    from ..core.srt import parse_visual_description
+    events = parse_visual_description(visual_description_path)
+    if not events:
+        return []
+
+    # Get non-skip events as anchors
+    anchors = [(ms, desc) for ms, desc, skip in events if not skip]
+    if not anchors:
+        return []
+
+    windows = []
+    for i in range(len(anchors) - 1):
+        start, desc = anchors[i]
+        end = anchors[i + 1][0]
+        windows.append((start, end, desc))
+
+    # Last window extends to video end
+    last_start, last_desc = anchors[-1]
+    windows.append((last_start, video_duration_ms, last_desc))
+
+    return windows
+
+
 def align_narration(
     narration_path: Path,
     subtitle_path: Path,
     out_path: Path,
     n_segments: int = 3,
     char_limits: list[int] | None = None,
+    video_duration_ms: int | None = None,
+    visual_description_path: Path | None = None,
     model: str = "qwen2.5:7b",
     api_key: str = "",
     api_key_env: str = "OPENAI_API_KEY",
     provider: str = "openai_compatible",
     base_url: str = "",
 ) -> None:
-    """Split narration.txt into n_segments timed blocks → narration_aligned.txt.
+    """Split narration.txt into timed blocks → narration_aligned.txt.
 
-    Uses LLM to draft the alignment, then re-splits each block using the same
-    sentence-aware algorithm as whisper_py.group_words (≤60 chars per chunk,
-    split at punctuation, ≥800ms per entry).
+    If visual_description_path is provided, time windows are created from
+    visual event timestamps (one window per visual event), ensuring each
+    narration segment aligns with what the viewer sees on screen.
+    Otherwise, falls back to equal subtitle windows.
     """
     client, call_fn = _get_backend(provider, base_url, api_key, api_key_env)
     narration = narration_path.read_text(encoding="utf-8").strip()
-    windows = _segment_subtitle_windows(subtitle_path, n_segments)
-    windows_text_lines = []
-    for i, (s, e) in enumerate(windows):
-        dur = (e - s) // 1000
-        char_info = f"（最多 {char_limits[i]} 字）" if char_limits else ""
-        windows_text_lines.append(f"  第 {i+1} 段：{ms_to_ts(s)} --> {ms_to_ts(e)}  时长 {dur} 秒 {char_info}")
-    windows_text = "\n".join(windows_text_lines)
+
+    # Prefer visual-based windows if available
+    visual_windows = []
+    if visual_description_path and visual_description_path.exists() and video_duration_ms:
+        visual_windows = _visual_description_windows(visual_description_path, video_duration_ms)
+
+    if visual_windows:
+        from ..core.srt import SPEAKING_RATE_CHARS_PER_SEC
+        windows_text_lines = []
+        for i, (s, e, desc) in enumerate(visual_windows):
+            dur = (e - s) // 1000
+            max_c = int(dur * SPEAKING_RATE_CHARS_PER_SEC)
+            windows_text_lines.append(
+                f"  第 {i+1} 段：{ms_to_ts(s)} --> {ms_to_ts(e)}  时长 {dur} 秒（最多 {max_c} 字）\n"
+                f"    画面内容：{desc}"
+            )
+        windows_text = "\n".join(windows_text_lines)
+        n_actual = len(visual_windows)
+    else:
+        windows = _segment_subtitle_windows(subtitle_path, n_segments)
+        windows_text_lines = []
+        for i, (s, e) in enumerate(windows):
+            dur = (e - s) // 1000
+            char_info = f"（最多 {char_limits[i]} 字）" if char_limits else ""
+            windows_text_lines.append(f"  第 {i+1} 段：{ms_to_ts(s)} --> {ms_to_ts(e)}  时长 {dur} 秒 {char_info}")
+        windows_text = "\n".join(windows_text_lines)
+        n_actual = n_segments
 
     user_text = llm_prompts.ALIGN_USER_TEMPLATE.format(
         narration=narration,
-        n_segments=n_segments,
+        n_segments=n_actual,
         windows_text=windows_text,
     )
 
-    print(f"Calling {model} for alignment ({n_segments} segments)...", file=sys.stderr)
+    print(f"Calling {model} for alignment ({n_actual} segments)...", file=sys.stderr)
     result = _stream_and_collect(
         call_fn, client, model, llm_prompts.ALIGN_SYSTEM, user_text
     )
@@ -381,11 +550,13 @@ def align_narration(
         if not chunks:
             continue
 
-        # Allocate time proportional to character count, no overlap with previous
-        entries, prev_end = allocate_chunk_times(chunks, start_ms, end_ms, prev_end)
+        # Allocate time proportional to character count, constrained to video duration
+        max_end = video_duration_ms or end_ms
+        entries, prev_end = allocate_chunk_times(
+            chunks, start_ms, end_ms, prev_end, max_end_ms=max_end,
+        )
         final_entries.extend(entries)
 
-    total_ms = windows[-1][1] if windows else 0
     write_srt(out_path, final_entries)
     print(f"Wrote {out_path} ({len(final_entries)} entries)")
     print("  ⚠ LLM 对齐为草稿，请人工 review 时间与文本后再跑 tts。", file=sys.stderr)
