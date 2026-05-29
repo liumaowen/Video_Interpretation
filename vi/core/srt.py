@@ -87,7 +87,7 @@ _TS_RE = re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 NARRATION_MAX_CHARS = 60
 NARRATION_MIN_DURATION_MS = 800
 NARRATION_END_PUNCT = set("。！？")
-NARRATION_SOFT_PUNCT = set("，；、")
+NARRATION_SOFT_PUNCT = set("，；、：")
 
 # For recording-friendly narration lines (one breath = one line)
 RECORDING_LINE_MAX_CHARS = 20
@@ -107,11 +107,18 @@ def _split_narration_sentences(text: str) -> list[str]:
     return [s for s in sentences if s]
 
 
-def _split_long_sentence_at(sent: str, max_chars: int) -> list[str]:
+def _split_long_sentence_at(sent: str, max_chars: int, min_chunk: int | None = None) -> list[str]:
     """Split a long sentence into ≤max_chars chunks at soft punctuation.
 
     Falls back to mid-point splitting if no soft punctuation exists.
+
+    Args:
+        min_chunk: Minimum accumulated characters before a soft-punctuation
+            split is accepted. Defaults to max_chars // 2.  Lower values
+            split earlier, useful for recording-friendly (≤20 char) output.
     """
+    if min_chunk is None:
+        min_chunk = max_chars // 2
     if len(sent) <= max_chars:
         return [sent]
 
@@ -140,14 +147,14 @@ def _split_long_sentence_at(sent: str, max_chars: int) -> list[str]:
     for i, ch in enumerate(chars):
         buf.append(ch)
         buf_len += 1
-        if i in split_indices and buf_len >= max_chars // 2:
+        if i in split_indices and buf_len >= min_chunk:
             segments.append("".join(buf))
             buf = []
             buf_len = 0
 
     if buf:
-        if segments and buf_len < 10:
-            # Short tail — merge into previous
+        if segments and buf_len < 10 and len(segments[-1]) + buf_len <= max_chars:
+            # Short tail — merge into previous (only if it won't exceed max_chars)
             segments[-1] += "".join(buf)
         else:
             segments.append("".join(buf))
@@ -155,12 +162,14 @@ def _split_long_sentence_at(sent: str, max_chars: int) -> list[str]:
     return segments if segments else [sent[:max_chars]]
 
 
-def _split_and_merge(text: str, max_chars: int, short_merge_threshold: int = 5, short_merge_limit: int = 20) -> list[str]:
+def _split_and_merge(text: str, max_chars: int, min_chunk: int | None = None, short_merge_threshold: int = 5, short_merge_limit: int = 20) -> list[str]:
     """Core algorithm: split text at sentence/soft-punctuation boundaries, merge short tails.
 
     Args:
         text: Input narration text.
         max_chars: Maximum characters per chunk.
+        min_chunk: Minimum accumulated chars before a soft-punctuation split
+            is accepted. Passed to _split_long_sentence_at.
         short_merge_threshold: Chunks ≤ this many chars get merged into previous.
         short_merge_limit: Only merge if combined length ≤ this.
 
@@ -172,7 +181,7 @@ def _split_and_merge(text: str, max_chars: int, short_merge_threshold: int = 5, 
     # Step 2: split long sentences at soft punctuation
     parts = []
     for sent in sentences:
-        parts.extend(_split_long_sentence_at(sent, max_chars))
+        parts.extend(_split_long_sentence_at(sent, max_chars, min_chunk))
 
     # Step 3: merge short chunks with previous
     merged = []
@@ -188,7 +197,7 @@ def _split_and_merge(text: str, max_chars: int, short_merge_threshold: int = 5, 
     result = []
     for item in merged:
         if len(item) > max_chars:
-            result.extend(_split_long_sentence_at(item, max_chars))
+            result.extend(_split_long_sentence_at(item, max_chars, min_chunk))
         else:
             result.append(item)
 
@@ -206,12 +215,14 @@ def split_narration_text(text: str) -> list[str]:
 def split_narration_for_recording(text: str) -> list[str]:
     """Split narration into short lines suitable for voice recording.
 
-    Each line is one natural pause (≤20 chars), split at commas/periods.
+    Each line is one natural pause (≤20 chars), split at commas/periods/colons.
+    Uses min_chunk=3 so soft punctuation splits even after very few characters.
     Returns a list of text chunks.
     """
     return _split_and_merge(
         text,
         RECORDING_LINE_MAX_CHARS,
+        min_chunk=3,
         short_merge_threshold=5,
         short_merge_limit=8,
     )
