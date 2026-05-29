@@ -89,6 +89,86 @@ NARRATION_MIN_DURATION_MS = 800
 NARRATION_END_PUNCT = set("。！？")
 NARRATION_SOFT_PUNCT = set("，；、")
 
+# For recording-friendly narration lines (one breath = one line)
+RECORDING_LINE_MAX_CHARS = 20
+
+
+def format_narration_for_recording(text: str) -> str:
+    """Split narration into short lines suitable for voice recording.
+
+    Each line is one natural pause (≤{RECORDING_LINE_MAX_CHARS} chars), split
+    at commas/periods/soft punctuation. Returns a single string with double
+    newlines between lines.
+    """
+    # Reuse the same sentence splitting logic
+    sentences = _split_narration_sentences(text)
+    parts = []
+    for sent in sentences:
+        parts.extend(_split_long_sentence_with_limit(sent, RECORDING_LINE_MAX_CHARS))
+
+    # Merge very short tails
+    merged = []
+    for chunk in parts:
+        if merged and len(chunk.strip()) <= 5:
+            merged[-1] = merged[-1].rstrip() + chunk
+        elif merged and len(merged[-1]) + len(chunk.strip()) <= RECORDING_LINE_MAX_CHARS and len(chunk.strip()) <= 8:
+            merged[-1] = merged[-1].rstrip() + chunk
+        else:
+            merged.append(chunk)
+
+    # Re-split any that still exceed the limit
+    result = []
+    for item in merged:
+        if len(item) > RECORDING_LINE_MAX_CHARS:
+            result.extend(_split_long_sentence_with_limit(item, RECORDING_LINE_MAX_CHARS))
+        else:
+            result.append(item)
+
+    return "\n\n".join(r.strip() for r in result if r.strip())
+
+
+def _split_long_sentence_with_limit(sent: str, max_chars: int) -> list[str]:
+    """Split a long sentence into chunks at soft punctuation, respecting max_chars."""
+    if len(sent) <= max_chars:
+        return [sent]
+
+    chars = list(sent)
+    split_indices = []
+    for i, ch in enumerate(chars[:-1]):
+        if ch in NARRATION_SOFT_PUNCT:
+            split_indices.append(i)
+
+    if not split_indices:
+        # No soft punctuation — split evenly
+        parts = []
+        remaining = sent
+        while len(remaining) > max_chars:
+            mid = len(remaining) // 2
+            parts.append(remaining[:mid])
+            remaining = remaining[mid:]
+        if remaining:
+            parts.append(remaining)
+        return parts
+
+    segments = []
+    buf = []
+    buf_len = 0
+    for i, ch in enumerate(chars):
+        buf.append(ch)
+        buf_len += 1
+        if i in split_indices and buf_len >= max_chars // 2:
+            segments.append("".join(buf))
+            buf = []
+            buf_len = 0
+
+    if buf:
+        if segments and buf_len < 10:
+            segments[-1] += "".join(buf)
+        else:
+            segments.append("".join(buf))
+
+    return segments if segments else [sent[:max_chars]]
+
 
 def _split_narration_sentences(text: str) -> list[str]:
     """Split narration at sentence terminators (。！？), mirroring whisper_py Step 1."""

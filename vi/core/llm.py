@@ -218,6 +218,11 @@ def generate_narration(
     result = _stream_and_collect(
         call_fn, client, model, llm_prompts.NARRATE_SYSTEM, user_text
     )
+
+    # Post-process: split into recording-friendly short lines (≤20 chars each)
+    from ..core.srt import format_narration_for_recording
+    result = format_narration_for_recording(result)
+
     out_path.write_text(result + "\n", encoding="utf-8")
     print(f"Wrote {out_path}")
 
