@@ -28,8 +28,8 @@ python main.py all <name>
 python main.py transcribe [name]   # ASR：默认 faster-whisper；可选 --engine funasr 走 SenseVoice + FSMN-VAD
 python main.py refine [name]       # 重新切分 SRT（仅 --engine exe 需要；其他引擎已直出合理粒度，all 会自动跳过）
 python main.py translate [name]    # 通过 LLM 把 subtitle.srt 翻译成 subtitle_zh.srt（保留时间戳），build 会优先用中文版本
-python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（默认 ModelScope/Qwen3；支持 --srt 一步式、--vision 视觉理解）
-python main.py align [name]        # 为解说稿标注时间轴
+python main.py llm-narrate [name]  # 通过 LLM 生成中文解说稿（--srt 一步式 / --visual 视觉锚定 / --vision 抽帧分析）
+python main.py align [name]        # 为解说稿标注时间轴（--llm LLM 对齐 / --vision 基于画面事件对齐）
 python main.py tts [name]          # 通过 edge-tts 合成配音
 python main.py build [name]        # 混音 + 烧入双字幕
 python main.py preview-srt [name]  # 预览字幕节奏（不跑 TTS）
@@ -106,8 +106,13 @@ vi/
 ## LLM provider 说明
 - [vi/core/llm.py](vi/core/llm.py) 同时支持 `anthropic` 和 `openai_compatible` 两种 provider，由 `[llm].provider` 选择
 - `openai_compatible` 走任何兼容 OpenAI Chat Completions 接口的服务（Ollama / SiliconFlow / DeepSeek / 智谱 GLM 等），通过 `[llm].base_url` 切换
-- `llm-narrate` 命令同时支持两步流程（`narration.txt` + `align`）与一步流程（`--srt` 直接出 `narration_aligned.txt`）
+- `llm-narrate` 命令支持三种模式：
+  - 两步流程（`narration.txt` + `--align` 对时）
+  - 一步流程（`--srt` 直接出 `narration_aligned.txt`）
+  - **视觉锚定模式**（`--visual`）：基于视觉事件逐帧创作解说，一一对应画面时间戳
 - `--vision` 开关：调 `vi/core/vision.py` 用 ffmpeg 抽关键帧 → 多模态模型描画面 → 缓存到 `projects/<name>/visual_description.txt` → 拼进解说 prompt
+- `--visual` 需要 `visual_description.txt` 已存在，可搭配 `--vision` 一次性完成抽帧+分析+生成
+- 抽帧间隔默认由 `config.toml` 的 `[vision].frame_interval` 控制（推荐 1 秒；长视频可改 2-3）
 
 ## ModelScope Notebook 部署
 

@@ -6,7 +6,7 @@ __pycache__/
 .eggs/
 .cache/
 .cargo/
-projects/
+#projects/
 
 # HuggingFace
 .huggingface/

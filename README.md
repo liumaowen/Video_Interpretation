@@ -126,6 +126,7 @@ python main.py refine [name] [-f]
 python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
                            [--model M] [--provider anthropic|openai_compatible]
                            [--base-url URL]
+                           [--visual]
                            [--vision] [--vision-model M] [--frame-interval SEC]
                            [--force-vision] [-f]
 ```
@@ -136,9 +137,10 @@ python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
 - `--srt` 一步式：直接产出 `narration_aligned.txt`，跳过中间 `narration.txt`
 - `--provider` LLM provider，覆盖配置（`openai_compatible` 默认 / `anthropic`）
 - `--base-url` OpenAI 兼容接口的 base URL（如自建 Ollama / SiliconFlow / 智谱）
+- `--visual` 视觉锚定模式：逐帧分析画面事件，为每个画面创作一句解说并精确标注时间戳，直接输出 `narration_aligned.txt`
 - `--vision` 抽取关键帧 + 调多模态视觉模型描述画面，把描述拼进 prompt
 - `--vision-model` 视觉模型名（默认从配置读，回退 `glm-4v-flash`）
-- `--frame-interval` 抽帧间隔（秒，默认 3）
+- `--frame-interval` 抽帧间隔（秒，默认由 `config.toml` 的 `[vision].frame_interval` 控制，推荐 1）
 - `--force-vision` 即使 `visual_description.txt` 已存在也重新分析
 
 **任何 `--align` / `--srt` LLM 草稿都必须人工 review 后才能跑 tts。**
@@ -230,6 +232,9 @@ alignment = 2                    # 2=底部居中，8=顶部居中
 linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
+[vision]
+frame_interval = 1  # 抽帧间隔（秒），推荐 1；长视频可改为 2-3 减少 API 调用
+
 [llm]
 provider = "openai_compatible"   # 或 "anthropic"
 base_url = "https://api-inference.modelscope.cn/v1"   # ModelScope 推理 API
@@ -309,7 +314,10 @@ python main.py llm-narrate my_proj --style "悬疑恐怖向，强调氛围" --le
 python main.py llm-narrate my_proj --srt --style "悬疑恐怖向"
 
 # 加视觉理解：先抽帧 + 调多模态模型描画面，再喂给文本模型
-python main.py llm-narrate my_proj --srt --vision --frame-interval 3
+python main.py llm-narrate my_proj --srt --vision --frame-interval 1
+
+# 视觉锚定模式：抽帧分析每个画面事件，为每个画面创作一句解说并精确标注时间
+python main.py llm-narrate my_proj --visual --vision --frame-interval 1
 ```
 
 - LLM 出的 `narration.txt` 通常可用，可能需要小幅微调语感
@@ -318,6 +326,7 @@ python main.py llm-narrate my_proj --srt --vision --frame-interval 3
   - 是否有剧透、人名错误
   - 段落字数是否过长（会被 tts 自动加速到失真）
 - `--vision` 第一次会调用视觉模型抽帧、产出 `visual_description.txt` 缓存；后续重跑会复用缓存，除非加 `--force-vision`
+- `--visual` 模式下，解说词与画面事件一一对应，配音与画面的同步度最高。需要先有 `visual_description.txt`（可用 `--vision` 生成）
 
 ## TTS 调优
 

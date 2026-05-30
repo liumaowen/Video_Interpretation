@@ -317,16 +317,13 @@ def generate_narration_visual(
     """Generate narration SRT anchored to visual event timestamps.
 
     Parses visual_description.txt, creates a prompt listing each visual
-    event with its timestamp, and instructs the LLM to write one short
-    narration line per visual event. Post-processing splits each line into
-    ≤20 char chunks and allocates time proportionally, anchored to the
-    visual event timestamp.
-
-    Total narration duration is constrained to fit within video_duration_ms.
+    event with a number and timestamp. LLM outputs numbered text lines
+    (no timestamps). We build the SRT ourselves using exact visual event
+    timestamps — zero drift.
     """
     from ..core.srt import (
         parse_visual_description, split_narration_for_recording,
-        allocate_chunk_times, SPEAKING_RATE_CHARS_PER_SEC, write_srt,
+        SPEAKING_RATE_CHARS_PER_SEC, NARRATION_MIN_DURATION_MS, write_srt,
     )
 
     # Parse visual description
@@ -343,7 +340,7 @@ def generate_narration_visual(
     duration_sec = video_duration_ms // 1000
     max_chars = int(duration_sec * SPEAKING_RATE_CHARS_PER_SEC)
 
-    # Build visual events text for prompt
+    # Build visual events text for prompt — numbered list with timestamps
     visual_events_lines = []
     for i, (ms, desc, _) in enumerate(active_events):
         ts = ms_to_ts(ms)
@@ -355,7 +352,7 @@ def generate_narration_visual(
             window_ms = video_duration_ms - ms
         window_sec = window_ms // 1000
         window_chars = int(window_sec * SPEAKING_RATE_CHARS_PER_SEC)
-        visual_events_lines.append(f"  [{ts}] {desc}  （窗口 {window_sec} 秒，最多 {window_chars} 字）")
+        visual_events_lines.append(f"  {i+1}. [{ts}] {desc}  （窗口 {window_sec} 秒，最多 {window_chars} 字）")
 
     # Build optional subtitle section
     subtitle_section = ""
@@ -379,32 +376,44 @@ def generate_narration_visual(
         call_fn, client, model, llm_prompts.VISUAL_ANCHOR_SYSTEM, user_text
     )
 
-    # Post-process: parse LLM output, split into chunks, allocate time
-    _blocks = re.split(r"\n\s*\n", result.strip())
+    # Post-process: parse LLM output as "N. text" lines, build SRT with
+    # exact visual event timestamps — no time drift.
+    _line_re = re.compile(r"^\s*(\d+)\.\s*(.+?)\s*$")
+    narration_map: dict[int, str] = {}
+    for line in result.splitlines():
+        m = _line_re.match(line)
+        if m:
+            idx = int(m.group(1))
+            text = m.group(2).strip()
+            if text:
+                narration_map[idx] = text
+
+    # Build SRT entries: each narration gets the exact visual event timestamp
     final_entries = []
     prev_end = None
 
-    for block in _blocks:
-        lines = [l.rstrip() for l in block.splitlines() if l.strip()]
-        if len(lines) < 3:
+    for i, (event_ms, desc, _) in enumerate(active_events):
+        # Skip if LLM didn't produce narration for this event number
+        idx = i + 1
+        if idx not in narration_map:
             continue
-        m = re.match(
-            r"\s*(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)\s*",
-            lines[1],
-        )
-        if not m:
-            continue
-        h1, mi1, s1, ms1, h2, mi2, s2, ms2 = map(int, m.groups())
-        start_ms = (h1 * 3600 + mi1 * 60 + s1) * 1000 + ms1
-        end_ms = (h2 * 3600 + mi2 * 60 + s2) * 1000 + ms2
-        text = "".join(l.strip() for l in lines[2:])
 
+        text = narration_map[idx]
+
+        # Determine window end
+        if i < len(active_events) - 1:
+            end_ms = active_events[i + 1][0]
+        else:
+            end_ms = video_duration_ms
+
+        # Split text into recording-friendly chunks
         chunks = split_narration_for_recording(text)
         if not chunks:
             continue
 
+        # Allocate time proportional to character count, anchored to event timestamp
         entries, prev_end = allocate_chunk_times(
-            chunks, start_ms, end_ms, prev_end, max_end_ms=video_duration_ms,
+            chunks, event_ms, end_ms, prev_end, max_end_ms=video_duration_ms,
         )
         final_entries.extend(entries)
 
