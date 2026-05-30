@@ -323,7 +323,7 @@ def generate_narration_visual(
     """
     from ..core.srt import (
         parse_visual_description, split_narration_for_recording,
-        SPEAKING_RATE_CHARS_PER_SEC, NARRATION_MIN_DURATION_MS, write_srt,
+        allocate_chunk_times, SPEAKING_RATE_CHARS_PER_SEC, write_srt,
     )
 
     # Parse visual description
