@@ -55,6 +55,9 @@ bold = 1
 linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
+[vision]
+frame_interval = 1  # Seconds between extracted key frames
+
 [llm]
 provider = "openai_compatible"
 base_url = "https://api-inference.modelscope.cn/v1"

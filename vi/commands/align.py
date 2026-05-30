@@ -10,8 +10,8 @@ def configure(p: argparse.ArgumentParser):
     p.add_argument("--vision", action="store_true",
                    help="Analyze video frames with a vision model and use visual events as time windows")
     p.add_argument("--vision-model", help="Vision model name (default from config or glm-4v-flash)")
-    p.add_argument("--frame-interval", type=int, default=3,
-                   help="Seconds between extracted key frames (default: 3)")
+    p.add_argument("--frame-interval", type=int,
+                   help="Seconds between extracted key frames (default from config or 1)")
     p.add_argument("-f", "--force", action="store_true", help="Overwrite existing aligned file")
     p.add_argument("--force-vision", action="store_true",
                    help="Force re-analyze video frames even if visual_description.txt exists")
@@ -47,7 +47,7 @@ def _get_visual_description(pdir, cfg, args):
         base_url=base_url,
         api_key=resolved_key,
         vision_model=vision_model,
-        interval_sec=args.frame_interval,
+        interval_sec=args.frame_interval or config.get(cfg, "vision.frame_interval", 1),
     )
 
 
