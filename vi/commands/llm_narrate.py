@@ -23,8 +23,10 @@ def configure(p: argparse.ArgumentParser):
     p.add_argument("--vision", action="store_true",
                    help="Analyze video frames with a vision model and include in prompt")
     p.add_argument("--vision-model", help="Vision model name (default from config or glm-4v-flash)")
-    p.add_argument("--frame-interval", type=int,
-                   help="Seconds between extracted key frames (default from config or 1)")
+    p.add_argument("--scene-threshold", type=float,
+                   help="Scene change sensitivity 0.0-1.0 (default from config or 0.3)")
+    p.add_argument("--max-frame-interval", type=int,
+                   help="Max seconds between frames when no scene change (default from config or 1)")
     p.add_argument("-f", "--force", action="store_true", help="Overwrite existing narration files")
     p.add_argument("--force-vision", action="store_true",
                    help="Force re-analyze video frames even if visual_description.txt exists")
@@ -56,13 +58,16 @@ def _get_visual_description(pdir, cfg, video_title, base_url, api_key, args):
 
     from ..core.vision import describe_video
     vision_model = args.vision_model or config.get(cfg, "llm.vision_model", "glm-4v-flash")
+    scene_threshold = args.scene_threshold or config.get(cfg, "vision.scene_threshold", 0.3)
+    max_interval = args.max_frame_interval or config.get(cfg, "vision.max_frame_interval", 1)
     return describe_video(
         video_path=video_path,
         video_title=video_title,
         base_url=base_url,
         api_key=api_key,
         vision_model=vision_model,
-        interval_sec=args.frame_interval or config.get(cfg, "vision.frame_interval", 1),
+        scene_threshold=scene_threshold,
+        max_interval_sec=max_interval,
     )
 
 

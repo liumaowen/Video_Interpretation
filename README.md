@@ -127,7 +127,8 @@ python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
                            [--model M] [--provider anthropic|openai_compatible]
                            [--base-url URL]
                            [--visual]
-                           [--vision] [--vision-model M] [--frame-interval SEC]
+                           [--vision] [--vision-model M]
+                           [--scene-threshold N] [--max-frame-interval SEC]
                            [--force-vision] [-f]
 ```
 
@@ -140,7 +141,8 @@ python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
 - `--visual` 视觉锚定模式：逐帧分析画面事件，为每个画面创作一句解说并精确标注时间戳，直接输出 `narration_aligned.txt`
 - `--vision` 抽取关键帧 + 调多模态视觉模型描述画面，把描述拼进 prompt
 - `--vision-model` 视觉模型名（默认从配置读，回退 `glm-4v-flash`）
-- `--frame-interval` 抽帧间隔（秒，默认由 `config.toml` 的 `[vision].frame_interval` 控制，推荐 1）
+- `--scene-threshold` 镜头切换检测灵敏度（0.0-1.0，默认 0.3，值越小抽帧越密）
+- `--max-frame-interval` 无镜头切换时的最大抽帧间隔（秒，默认由 `config.toml` 的 `[vision].max_frame_interval` 控制，推荐 1）
 - `--force-vision` 即使 `visual_description.txt` 已存在也重新分析
 
 **任何 `--align` / `--srt` LLM 草稿都必须人工 review 后才能跑 tts。**
@@ -233,7 +235,8 @@ linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [vision]
-frame_interval = 1  # 抽帧间隔（秒），推荐 1；长视频可改为 2-3 减少 API 调用
+scene_threshold = 0.3  # 镜头切换检测灵敏度（0.0-1.0）
+max_frame_interval = 1  # 无切换时最大抽帧间隔（秒），长视频可改为 2-3
 
 [llm]
 provider = "openai_compatible"   # 或 "anthropic"
@@ -314,10 +317,10 @@ python main.py llm-narrate my_proj --style "悬疑恐怖向，强调氛围" --le
 python main.py llm-narrate my_proj --srt --style "悬疑恐怖向"
 
 # 加视觉理解：先抽帧 + 调多模态模型描画面，再喂给文本模型
-python main.py llm-narrate my_proj --srt --vision --frame-interval 1
+python main.py llm-narrate my_proj --srt --vision --max-frame-interval 1
 
 # 视觉锚定模式：抽帧分析每个画面事件，为每个画面创作一句解说并精确标注时间
-python main.py llm-narrate my_proj --visual --vision --frame-interval 1
+python main.py llm-narrate my_proj --visual --vision --max-frame-interval 1
 ```
 
 - LLM 出的 `narration.txt` 通常可用，可能需要小幅微调语感

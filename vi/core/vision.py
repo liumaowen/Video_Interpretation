@@ -1,13 +1,14 @@
 """Video frame extraction + vision model analysis.
 
-Extract key frames from the source video via ffmpeg, then describe each
-frame using a multimodal LLM (e.g. GLM-4V-Flash) via the OpenAI-compatible
-chat completions API with image inputs.
+Extract key frames from the source video via ffmpeg scene detection, then
+describe each frame using a multimodal LLM (e.g. GLM-4V-Flash) via the
+OpenAI-compatible chat completions API with image inputs.
 
 The result is a timeline of visual descriptions that can be fed into the
 narration prompt so the LLM knows what's actually happening on screen.
 """
 import base64
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,15 +18,20 @@ from .srt import ms_to_ts
 
 
 # ---------------------------------------------------------------------------
-# Frame extraction
+# Frame extraction (scene-detection based)
 # ---------------------------------------------------------------------------
 
 def extract_key_frames(
     video_path: Path,
-    interval_sec: int = 3,
+    scene_threshold: float = 0.3,
+    max_interval_sec: int = 3,
     tmp_dir: Path | None = None,
 ) -> list[tuple[int, Path]]:
-    """Extract one frame every *interval_sec* seconds from *video_path*.
+    """Extract key frames from *video_path* using ffmpeg scene detection.
+
+    Frames are selected when either:
+    - the scene change score exceeds *scene_threshold* (0.0-1.0)
+    - no frame has been selected in the last *max_interval_sec* seconds
 
     Returns a list of (timestamp_ms, frame_path) sorted by time.
     Frames are saved as JPEG in *tmp_dir* (or a temp dir if None).
@@ -33,33 +39,55 @@ def extract_key_frames(
     out_dir = tmp_dir or Path(tempfile.mkdtemp(prefix="vi_frames_"))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ffmpeg -i source.mp4 -vf fps=1/3 frame_%04d.jpg
     pattern = str(out_dir / "frame_%04d.jpg")
+
+    # Step 1: Extract frames at scene cuts or periodic intervals, capture timestamps
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-nostdin",
         "-i", str(video_path),
-        "-vf", f"fps=1/{interval_sec}",
+        "-vf", (
+            f"select='gt(scene,{scene_threshold})"
+            f"+isnan(prev_selected_t)"
+            f"+gte(t-prev_selected_t,{max_interval_sec})'"
+            ",showinfo"
+        ),
+        "-vsync", "vfr",
         pattern,
     ]
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError:
         raise SystemExit("ffmpeg not found. Install it: apt-get install ffmpeg")
     except subprocess.CalledProcessError as e:
-        raise SystemExit(f"ffmpeg frame extraction failed: {e.stderr.decode()}")
+        raise SystemExit(f"ffmpeg frame extraction failed: {e.stderr}")
+
+    # Step 2: Parse showinfo timestamps from ffmpeg stderr
+    ts_pattern = re.compile(r"pkt_pts_time:([\d.]+)")
+    timestamps = []
+    for line in result.stderr.splitlines():
+        m = ts_pattern.search(line)
+        if m:
+            timestamps.append(float(m.group(1)))
 
     frames = sorted(out_dir.glob("frame_*.jpg"))
     if not frames:
         raise SystemExit(f"No frames extracted from {video_path}")
 
-    result = []
+    # Match frames to timestamps; fallback to linear estimation
+    result_list = []
     for i, fp in enumerate(frames):
-        ts_ms = (i + 1) * interval_sec * 1000  # 1-based: frame_0001 = 3s
-        # Clamp first frame to 0 for accuracy
-        if i == 0:
-            ts_ms = 0
-        result.append((ts_ms, fp))
-    return result
+        if i < len(timestamps):
+            ts_ms = int(timestamps[i] * 1000)
+        else:
+            # Fallback: estimate from frame index
+            ts_ms = int((i / max(len(frames), 1)) * 1000 * 60)  # rough estimate
+        result_list.append((ts_ms, fp))
+
+    # Clamp first frame to 0 for accuracy
+    if result_list:
+        result_list[0] = (0, result_list[0][1])
+
+    return result_list
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +220,10 @@ def describe_video(
     base_url: str,
     api_key: str,
     vision_model: str = "glm-4v-flash",
-    interval_sec: int = 3,
+    scene_threshold: float = 0.3,
+    max_interval_sec: int = 3,
 ) -> str:
-    """Extract key frames from video, analyze with vision model, return description.
+    """Extract key frames via scene detection, analyze with vision model, return description.
 
     Also saves description to <project_dir>/visual_description.txt for caching.
     Temporary frame images are cleaned up automatically.
@@ -203,7 +232,7 @@ def describe_video(
 
     with tempfile.TemporaryDirectory(prefix="vi_frames_") as tmp:
         tmp_dir = Path(tmp)
-        frames = extract_key_frames(video_path, interval_sec, tmp_dir)
+        frames = extract_key_frames(video_path, scene_threshold, max_interval_sec, tmp_dir)
         description = analyze_frames(
             frames, video_title, base_url, api_key, vision_model
         )
