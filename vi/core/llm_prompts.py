@@ -45,6 +45,8 @@ VISUAL_ANCHOR_SYSTEM = """你是一位资深的 B 站影视解说写手。任务
 2. 雪山脚下这座酒店，藏着致命秘密
 3. 男人盯着打字机，眼神压抑
 
+直接输出编号和解说文本，不要任何前言、说明、Markdown 代码块包裹。"""
+
 
 VISUAL_ANCHOR_USER_TEMPLATE = """【视频标题】：{video_title}
 
