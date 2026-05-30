@@ -141,7 +141,7 @@ python main.py llm-narrate [name] [--style S] [--length N] [--align] [--srt]
 - `--visual` 视觉锚定模式：逐帧分析画面事件，为每个画面创作一句解说并精确标注时间戳，直接输出 `narration_aligned.txt`
 - `--vision` 抽取关键帧 + 调多模态视觉模型描述画面，把描述拼进 prompt
 - `--vision-model` 视觉模型名（默认从配置读，回退 `glm-4v-flash`）
-- `--scene-threshold` 镜头切换检测灵敏度（0.0-1.0，默认 0.3，值越小抽帧越密）
+- `--scene-threshold` 镜头切换检测灵敏度（0.0-1.0，默认 0.45，值越大抽帧越稀疏）
 - `--max-frame-interval` 无镜头切换时的最大抽帧间隔（秒，默认由 `config.toml` 的 `[vision].max_frame_interval` 控制，推荐 1）
 - `--force-vision` 即使 `visual_description.txt` 已存在也重新分析
 
@@ -235,7 +235,7 @@ linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [vision]
-scene_threshold = 0.3  # 镜头切换检测灵敏度（0.0-1.0）
+scene_threshold = 0.45  # 镜头切换检测灵敏度（0.0-1.0），值越大抽帧越稀疏
 max_frame_interval = 1  # 无切换时最大抽帧间隔（秒），长视频可改为 2-3
 
 [llm]

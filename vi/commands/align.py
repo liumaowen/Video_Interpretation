@@ -43,7 +43,7 @@ def _get_visual_description(pdir, cfg, args):
 
     base_url = config.get(cfg, "llm.base_url", "")
     vision_model = args.vision_model or config.get(cfg, "llm.vision_model", "glm-4v-flash")
-    scene_threshold = args.scene_threshold or config.get(cfg, "vision.scene_threshold", 0.3)
+    scene_threshold = args.scene_threshold or config.get(cfg, "vision.scene_threshold", 0.45)
     max_interval = args.max_frame_interval or config.get(cfg, "vision.max_frame_interval", 1)
     return describe_video(
         video_path=video_path,

@@ -113,7 +113,7 @@ vi/
 - `--vision` 开关：调 `vi/core/vision.py` 用 ffmpeg **镜头切换检测**抽关键帧 → 多模态模型描画面 → 缓存到 `projects/<name>/visual_description.txt` → 拼进解说 prompt
 - `--visual` 需要 `visual_description.txt` 已存在，可搭配 `--vision` 一次性完成抽帧+分析+生成
 - 抽帧参数由 `config.toml` 的 `[vision]` 控制：
-  - `scene_threshold = 0.3` — 镜头切换检测灵敏度（0.0-1.0），值越小抽帧越密
+  - `scene_threshold = 0.45` — 镜头切换检测灵敏度（0.0-1.0），值越大抽帧越稀疏
   - `max_frame_interval = 1` — 无镜头切换时的最大抽帧间隔（秒），保证长镜头也有覆盖
 
 ## ModelScope Notebook 部署
