@@ -316,10 +316,9 @@ def generate_narration_visual(
 ) -> None:
     """Generate narration SRT anchored to visual event timestamps.
 
-    Parses visual_description.txt, creates a prompt listing each visual
-    event with a number and timestamp. LLM outputs numbered text lines
-    (no timestamps). We build the SRT ourselves using exact visual event
-    timestamps — zero drift.
+    Parses visual_description.txt, groups nearby events into larger windows
+    (≥3s each), then asks the LLM to write one narration line per window.
+    SRT is built using the exact window timestamps — no drift, no pile-up.
     """
     from ..core.srt import (
         parse_visual_description, split_narration_for_recording,
@@ -332,9 +331,43 @@ def generate_narration_visual(
         raise SystemExit(f"No visual events parsed from {visual_description_path}")
 
     # Filter out skip events (Logo, black screen) for narration
-    active_events = [(ms, desc, False) for ms, desc, skip in visual_events if not skip]
+    active_events = [(ms, desc) for ms, desc, skip in visual_events if not skip]
     if not active_events:
         raise SystemExit("No active visual events after filtering.")
+
+    # Group consecutive events into windows with a target duration.
+    # Events are typically ~1s apart (max_frame_interval=1), so 87 events in 87s
+    # = 1s/event — too short for narration. We aim for ~3s per window.
+    _TARGET_WINDOW_MS = 3000
+
+    windows: list[tuple[int, int, str, list[int]]] = []  # (start, end, desc, event_indices)
+    win_start = active_events[0][0]
+    win_descs: list[str] = [active_events[0][1]]
+    win_indices: list[int] = [0]
+
+    for i in range(1, len(active_events)):
+        cur_ts, cur_desc = active_events[i]
+        prev_ts = active_events[i - 1][0]
+        elapsed = cur_ts - win_start
+
+        if elapsed >= _TARGET_WINDOW_MS:
+            # Finalize current window
+            win_end = cur_ts
+            desc = " → ".join(win_descs) if len(win_descs) > 1 else win_descs[0]
+            windows.append((win_start, win_end, desc, win_indices))
+            win_start = cur_ts
+            win_descs = [cur_desc]
+            win_indices = [i]
+        else:
+            win_descs.append(cur_desc)
+            win_indices.append(i)
+
+    # Last window: extend past the last event (use max of video_duration_ms
+    # and last_event_ts + 3s to handle subtitle.srt that ends before video)
+    last_event_ts = win_start
+    effective_video_dur = max(video_duration_ms, last_event_ts + 3000)
+    desc = " → ".join(win_descs) if len(win_descs) > 1 else win_descs[0]
+    windows.append((win_start, effective_video_dur, desc, win_indices))
 
     # Calculate max chars
     duration_sec = video_duration_ms // 1000
@@ -342,17 +375,14 @@ def generate_narration_visual(
 
     # Build visual events text for prompt — numbered list with timestamps
     visual_events_lines = []
-    for i, (ms, desc, _) in enumerate(active_events):
-        ts = ms_to_ts(ms)
-        # Calculate available window until next event
-        if i < len(active_events) - 1:
-            next_ms = active_events[i + 1][0]
-            window_ms = next_ms - ms
-        else:
-            window_ms = video_duration_ms - ms
-        window_sec = window_ms // 1000
+    for i, (win_start_ms, win_end_ms, win_desc, _) in enumerate(windows):
+        ts = ms_to_ts(win_start_ms)
+        window_ms = win_end_ms - win_start_ms
+        window_sec = max(1, window_ms // 1000)
         window_chars = int(window_sec * SPEAKING_RATE_CHARS_PER_SEC)
-        visual_events_lines.append(f"  {i+1}. [{ts}] {desc}  （窗口 {window_sec} 秒，最多 {window_chars} 字）")
+        visual_events_lines.append(
+            f"  {i+1}. [{ts}] {win_desc}  （窗口 {window_sec} 秒，最多 {window_chars} 字）"
+        )
 
     # Build optional subtitle section
     subtitle_section = ""
@@ -370,14 +400,14 @@ def generate_narration_visual(
         visual_events="\n".join(visual_events_lines),
     )
 
-    print(f"Calling {model} for visual-anchored narration (style={style!r}, {len(active_events)} events)...",
+    print(f"Calling {model} for visual-anchored narration (style={style!r}, {len(windows)} windows from {len(active_events)} events)...",
           file=sys.stderr)
     result = _stream_and_collect(
         call_fn, client, model, llm_prompts.VISUAL_ANCHOR_SYSTEM, user_text
     )
 
     # Post-process: parse LLM output as "N. text" lines, build SRT with
-    # exact visual event timestamps — no time drift.
+    # exact window timestamps — no time drift.
     _line_re = re.compile(r"^\s*(\d+)\.\s*(.+?)\s*$")
     narration_map: dict[int, str] = {}
     for line in result.splitlines():
@@ -388,32 +418,25 @@ def generate_narration_visual(
             if text:
                 narration_map[idx] = text
 
-    # Build SRT entries: each narration gets the exact visual event timestamp
+    # Build SRT entries: each window gets one narration with its exact timestamp
     final_entries = []
     prev_end = None
 
-    for i, (event_ms, desc, _) in enumerate(active_events):
-        # Skip if LLM didn't produce narration for this event number
+    for i, (win_start_ms, win_end_ms, win_desc, _) in enumerate(windows):
         idx = i + 1
         if idx not in narration_map:
             continue
 
         text = narration_map[idx]
 
-        # Determine window end
-        if i < len(active_events) - 1:
-            end_ms = active_events[i + 1][0]
-        else:
-            end_ms = video_duration_ms
-
         # Split text into recording-friendly chunks
         chunks = split_narration_for_recording(text)
         if not chunks:
             continue
 
-        # Allocate time proportional to character count, anchored to event timestamp
+        # Allocate time proportional to character count, anchored to window timestamp
         entries, prev_end = allocate_chunk_times(
-            chunks, event_ms, end_ms, prev_end, max_end_ms=video_duration_ms,
+            chunks, win_start_ms, win_end_ms, prev_end, max_end_ms=video_duration_ms,
         )
         final_entries.extend(entries)
 
@@ -441,12 +464,19 @@ def _segment_subtitle_windows(subtitle_path: Path, n: int) -> list[tuple[int, in
 def _visual_description_windows(
     visual_description_path: Path,
     video_duration_ms: int,
+    min_window_sec: int = 3,
 ) -> list[tuple[int, int, str]]:
     """Create time windows from visual description events.
 
+    Consecutive events are grouped into windows of approximately
+    *min_window_sec* seconds so each has enough duration for a meaningful
+    narration segment. Without consolidation, 87 events in 87 seconds = 1s
+    each, which is too short for narration.
+
     Returns list of (start_ms, end_ms, description) where each window spans
-    from one visual event to the next. Skip events (Logo/black-screen) are
-    filtered out but their time gaps are preserved.
+    from the first event in the group to the next group's first event.
+    Skip events (Logo/black-screen) are filtered out but their time gaps are
+    preserved.
     """
     from ..core.srt import parse_visual_description
     events = parse_visual_description(visual_description_path)
@@ -458,15 +488,29 @@ def _visual_description_windows(
     if not anchors:
         return []
 
+    # Group consecutive events by target duration (not gap)
     windows = []
-    for i in range(len(anchors) - 1):
-        start, desc = anchors[i]
-        end = anchors[i + 1][0]
-        windows.append((start, end, desc))
+    group_start = anchors[0][0]
+    group_descs = [anchors[0][1]]
 
-    # Last window extends to video end
-    last_start, last_desc = anchors[-1]
-    windows.append((last_start, video_duration_ms, last_desc))
+    for i in range(1, len(anchors)):
+        cur_ts, cur_desc = anchors[i]
+        elapsed = cur_ts - group_start
+
+        group_descs.append(cur_desc)
+
+        if elapsed >= min_window_sec * 1000:
+            window_end = cur_ts
+            combined = group_descs[0] if len(group_descs) == 1 else f"{group_descs[0]} → {group_descs[-1]}"
+            windows.append((group_start, window_end, combined))
+            group_start = cur_ts
+            group_descs = [cur_desc]
+
+    # Last group: extend to max(video_end, last_event + min_window_sec)
+    if group_descs:
+        combined = group_descs[0] if len(group_descs) == 1 else f"{group_descs[0]} → {group_descs[-1]}"
+        effective_dur = max(video_duration_ms, group_start + min_window_sec * 1000)
+        windows.append((group_start, effective_dur, combined))
 
     return windows
 
