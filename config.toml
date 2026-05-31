@@ -56,7 +56,7 @@ linux_subtitle_original = "DejaVu Sans"
 linux_subtitle_narration = "Noto Sans CJK SC Regular"
 
 [vision]
-scene_threshold = 0.45  # Scene change sensitivity (0.0-1.0); higher = fewer frames
+scene_threshold = 0.55  # Scene change sensitivity (0.0-1.0); higher = fewer frames
 max_frame_interval = 1  # Max seconds between frames when no scene change detected
 
 [llm]

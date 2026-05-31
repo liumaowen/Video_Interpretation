@@ -165,6 +165,32 @@ def _analyze_batch(
 BATCH_SIZE = 15  # Max frames per API call to avoid truncation
 
 
+def _deduplicate_description(description: str) -> str:
+    """Remove consecutive duplicate lines from vision model output.
+
+    Keeps only the first occurrence of any description that appears
+    multiple times in a row (e.g. same scene on adjacent frames).
+    """
+    lines = description.splitlines()
+    if not lines:
+        return description
+
+    result = []
+    prev_desc = None
+    for line in lines:
+        # Extract description part after timestamp
+        if "] " in line:
+            desc = line.split("] ", 1)[1].strip()
+        else:
+            desc = line.strip()
+        if desc != prev_desc:
+            result.append(line)
+            prev_desc = desc
+        # Skip this line — duplicate of previous
+
+    return "\n".join(result)
+
+
 def analyze_frames(
     frames: list[tuple[int, Path]],
     video_title: str,
@@ -179,6 +205,8 @@ def analyze_frames(
         [00:00:00,000] 片头Logo
         [00:00:03,000] 荒野中一个男人带着狗行走
         ...
+
+    Consecutive duplicate descriptions are automatically removed.
     """
     try:
         from openai import OpenAI
@@ -190,7 +218,9 @@ def analyze_frames(
     if len(frames) <= BATCH_SIZE:
         # Single batch
         print(f"Calling {vision_model} for frame analysis ({len(frames)} frames)...", file=sys.stderr)
-        return _analyze_batch(client, vision_model, frames, video_title)
+        return _deduplicate_description(
+            _analyze_batch(client, vision_model, frames, video_title)
+        )
 
     # Multiple batches
     all_descriptions = []
@@ -207,7 +237,7 @@ def analyze_frames(
         desc = _analyze_batch(client, vision_model, batch, video_title)
         all_descriptions.append(desc)
 
-    return "\n".join(all_descriptions)
+    return _deduplicate_description("\n".join(all_descriptions))
 
 
 # ---------------------------------------------------------------------------
