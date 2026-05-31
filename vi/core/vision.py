@@ -62,7 +62,7 @@ def extract_key_frames(
         raise SystemExit(f"ffmpeg frame extraction failed: {e.stderr}")
 
     # Step 2: Parse showinfo timestamps from ffmpeg stderr
-    ts_pattern = re.compile(r"pkt_pts_time:([\d.]+)")
+    ts_pattern = re.compile(r"pts_time:([\d.]+)")
     timestamps = []
     for line in result.stderr.splitlines():
         m = ts_pattern.search(line)
