@@ -554,6 +554,12 @@ def align_narration(
         end_ms = (h2 * 3600 + m2 * 60 + s2) * 1000 + ms2
         text = "".join(l.strip() for l in lines[2:])
 
+        # Clamp LLM timestamps to video duration (LLMs often hallucinate times
+        # beyond the actual video length, especially with many segments)
+        if video_duration_ms is not None:
+            start_ms = min(start_ms, max(0, video_duration_ms - 800))
+            end_ms = min(end_ms, video_duration_ms)
+
         # Split text into ≤20 char chunks at natural breakpoints
         chunks = split_narration_for_recording(text)
         if not chunks:

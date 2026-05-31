@@ -294,6 +294,14 @@ def allocate_chunk_times(chunks: list[str], start_ms: int, end_ms: int,
     # Start from max of original start and previous block's end (no overlap)
     cur = max(start_ms, prev_end_ms) if prev_end_ms is not None else start_ms
 
+    # If cur already exceeds the video deadline (LLM hallucinated timestamps),
+    # clamp start so chunks are placed within the valid range.
+    if max_end_ms is not None and cur > max_end_ms:
+        # Place remaining chunks in the last available window proportionally
+        cur = max_end_ms - NARRATION_MIN_DURATION_MS * len(chunks)
+        if cur < 0:
+            cur = 0
+
     # Calculate ideal duration for each chunk based on char count
     ideal_durs = []
     for chunk in chunks:
@@ -324,12 +332,25 @@ def allocate_chunk_times(chunks: list[str], start_ms: int, end_ms: int,
             if available > 0:
                 scale = available / total_ideal if total_ideal > 0 else 1.0
                 final_durs = [max(int(d * scale), NARRATION_MIN_DURATION_MS) for d in ideal_durs]
+            else:
+                # cur already at or past max_end_ms — force minimum durations
+                final_durs = [NARRATION_MIN_DURATION_MS] * len(chunks)
 
     entries = []
     for chunk, dur in zip(chunks, final_durs):
         chunk_end = cur + dur
         entries.append((cur, chunk_end, chunk))
         cur = chunk_end
+
+    # Final clamp: ensure the last entry doesn't exceed max_end_ms
+    # (the NARRATION_MIN_DURATION_MS floor can push the total past the deadline)
+    if max_end_ms is not None and cur > max_end_ms:
+        overflow = cur - max_end_ms
+        # Trim the last chunk's end to exactly max_end_ms
+        last = list(entries[-1])
+        last[1] = max_end_ms
+        entries[-1] = tuple(last)
+        cur = max_end_ms
 
     return entries, cur
 
